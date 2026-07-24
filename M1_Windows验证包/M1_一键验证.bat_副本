@@ -1,0 +1,126 @@
+@echo off
+setlocal EnableExtensions EnableDelayedExpansion
+chcp 65001 >nul
+title M1 Windows Photoshop COM 验证
+
+set "SCRIPT_DIR=%~dp0"
+set "PS_SCRIPT=%SCRIPT_DIR%M1_验证.ps1"
+set "OUTPUT_DIR=%SCRIPT_DIR%输出"
+set "TXT_REPORT=%OUTPUT_DIR%\M1验证报告.txt"
+set "ENTRY_TXT_REPORT=%OUTPUT_DIR%\M1入口失败报告.txt"
+set "ENTRY_CSV_REPORT=%OUTPUT_DIR%\M1入口失败报告.csv"
+set "UTF8_BOM=﻿"
+
+echo ========================================
+echo M1 Windows Photoshop COM 一键验证
+echo ========================================
+echo.
+
+if not exist "%OUTPUT_DIR%" mkdir "%OUTPUT_DIR%" >nul 2>nul
+call :CAPTURE_MAIN_REPORT_STATE BEFORE
+
+if not exist "%PS_SCRIPT%" (
+  echo 未找到验证脚本：
+  echo %PS_SCRIPT%
+  echo.
+  echo 请确认本文件和 M1_验证.ps1 放在同一个文件夹。
+  call :WRITE_FALLBACK_REPORT "PS1缺失" "未找到 M1_验证.ps1，验证无法启动。"
+  start "" "%OUTPUT_DIR%" >nul 2>nul
+  pause
+  exit /b 1
+)
+
+echo 正在启动验证，请稍候...
+echo.
+
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%PS_SCRIPT%"
+set "EXIT_CODE=%ERRORLEVEL%"
+call :CAPTURE_MAIN_REPORT_STATE AFTER
+
+if not "%EXIT_CODE%"=="0" (
+  call :IS_MAIN_REPORT_UPDATED_THIS_RUN
+  if "!MAIN_REPORT_UPDATED!"=="0" (
+    call :WRITE_FALLBACK_REPORT "PowerShell入口失败" "powershell.exe 未能启动，或 M1_验证.ps1 在生成报告前退出。入口退出码：%EXIT_CODE%"
+  )
+)
+
+start "" "%OUTPUT_DIR%" >nul 2>nul
+
+echo.
+echo ========================================
+echo 验证已结束
+echo 报告文件夹：%OUTPUT_DIR%
+echo ========================================
+echo.
+echo 请把“输出”文件夹里的 M1验证报告.txt 和 M1验证报告.csv 交给开发同事。
+echo.
+pause
+exit /b %EXIT_CODE%
+
+:CAPTURE_MAIN_REPORT_STATE
+set "%~1_EXISTS=0"
+set "%~1_SIZE="
+set "%~1_TIME="
+if exist "%TXT_REPORT%" (
+  set "%~1_EXISTS=1"
+  for %%F in ("%TXT_REPORT%") do (
+    set "%~1_SIZE=%%~zF"
+    set "%~1_TIME=%%~tF"
+  )
+)
+goto :EOF
+
+:IS_MAIN_REPORT_UPDATED_THIS_RUN
+set "MAIN_REPORT_UPDATED=0"
+if "%AFTER_EXISTS%"=="0" goto :EOF
+if "%BEFORE_EXISTS%"=="0" (
+  set "MAIN_REPORT_UPDATED=1"
+  goto :EOF
+)
+if not "%BEFORE_SIZE%"=="%AFTER_SIZE%" (
+  set "MAIN_REPORT_UPDATED=1"
+  goto :EOF
+)
+if not "%BEFORE_TIME%"=="%AFTER_TIME%" (
+  set "MAIN_REPORT_UPDATED=1"
+  goto :EOF
+)
+goto :EOF
+
+:WRITE_FALLBACK_REPORT
+set "FAIL_KIND=%~1"
+set "FAIL_DETAIL=%~2"
+set "RUN_ID=%DATE% %TIME% #%RANDOM%%RANDOM%"
+if not exist "%OUTPUT_DIR%" mkdir "%OUTPUT_DIR%" >nul 2>nul
+> "%ENTRY_TXT_REPORT%" echo %UTF8_BOM%M1 Windows Photoshop COM 入口失败报告
+>> "%ENTRY_TXT_REPORT%" echo.
+>> "%ENTRY_TXT_REPORT%" echo 状态：未通过
+>> "%ENTRY_TXT_REPORT%" echo 时间：%DATE% %TIME%
+>> "%ENTRY_TXT_REPORT%" echo 本次标识：%RUN_ID%
+>> "%ENTRY_TXT_REPORT%" echo Windows版本：%OS%
+>> "%ENTRY_TXT_REPORT%" echo PowerShell版本：未检测
+>> "%ENTRY_TXT_REPORT%" echo Photoshop路径：未检测
+>> "%ENTRY_TXT_REPORT%" echo Photoshop版本：未检测
+>> "%ENTRY_TXT_REPORT%" echo COM ProgID：未检测
+>> "%ENTRY_TXT_REPORT%" echo COM启动：未执行
+>> "%ENTRY_TXT_REPORT%" echo JSX执行：未执行
+>> "%ENTRY_TXT_REPORT%" echo 标记回传：未执行
+>> "%ENTRY_TXT_REPORT%" echo 标记路径：未检测
+>> "%ENTRY_TXT_REPORT%" echo 错误摘要：%FAIL_KIND%：%FAIL_DETAIL%
+>> "%ENTRY_TXT_REPORT%" echo 建议动作：请确认验证包文件完整，并把本输出文件夹交给开发同事排查入口环境。
+> "%ENTRY_CSV_REPORT%" echo %UTF8_BOM%"字段","值"
+>> "%ENTRY_CSV_REPORT%" echo "状态","未通过"
+>> "%ENTRY_CSV_REPORT%" echo "时间","%DATE% %TIME%"
+>> "%ENTRY_CSV_REPORT%" echo "本次标识","%RUN_ID%"
+>> "%ENTRY_CSV_REPORT%" echo "Windows版本","%OS%"
+>> "%ENTRY_CSV_REPORT%" echo "PowerShell版本","未检测"
+>> "%ENTRY_CSV_REPORT%" echo "Photoshop路径","未检测"
+>> "%ENTRY_CSV_REPORT%" echo "Photoshop版本","未检测"
+>> "%ENTRY_CSV_REPORT%" echo "COM ProgID","未检测"
+>> "%ENTRY_CSV_REPORT%" echo "COM启动","未执行"
+>> "%ENTRY_CSV_REPORT%" echo "JSX执行","未执行"
+>> "%ENTRY_CSV_REPORT%" echo "标记回传","未执行"
+>> "%ENTRY_CSV_REPORT%" echo "标记路径","未检测"
+>> "%ENTRY_CSV_REPORT%" echo "错误摘要","%FAIL_KIND%：%FAIL_DETAIL%"
+>> "%ENTRY_CSV_REPORT%" echo "建议动作","请确认验证包文件完整，并把本输出文件夹交给开发同事排查入口环境。"
+goto :EOF

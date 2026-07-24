@@ -1,0 +1,10 @@
+.DS_Store
+.~*
+__pycache__/
+*.py[cod]
+
+# Generated deliverables and local validation output.
+发布包/
+试跑输出*/
+M1_Windows验证包/输出/*
+!M1_Windows验证包/输出/.gitkeep
