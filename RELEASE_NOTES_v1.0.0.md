@@ -27,5 +27,6 @@
 - Photoshop 2026（27.2）为已验证版本；其他 Windows 正式版按自动化接口能力检测，不按版本号直接拦截。
 - 已验证 JPG、可编辑 PSD、数据记录、异常记录、生成结果和任务日志落盘。
 - Windows 界面回归通过。
+- 发布验收新增最终 ZIP 全新解压与真实单商品导出门禁，并核对结果报告、JPG/PSD 文件有效性和完整任务记录。
 
 完整安装和使用步骤见[飞书新手教程](https://pcnfsebpg8ae.feishu.cn/wiki/HE7JwtImKiaRhLkVNFwcakrmnxg)。

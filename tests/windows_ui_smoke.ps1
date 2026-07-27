@@ -28,6 +28,7 @@ public static class NativeMouse {
 New-Item -Path $ArtifactDir -ItemType Directory -Force | Out-Null
 $logPath = Join-Path $ArtifactDir 'ui-smoke.log'
 $process = $null
+$existingTaskDirectoryPaths = @()
 
 function Write-SmokeLog {
     param([string]$Message)
@@ -171,6 +172,12 @@ function Write-ControlSnapshot {
 
 try {
     Write-SmokeLog '开始 Windows 界面回归。'
+    if (Test-Path -LiteralPath $OutputRoot -PathType Container) {
+        $existingTaskDirectoryPaths = @(
+            Get-ChildItem -LiteralPath $OutputRoot -Directory -ErrorAction SilentlyContinue |
+                Select-Object -ExpandProperty FullName
+        )
+    }
     $entry = Join-Path $ToolRoot '开始套版.cmd'
     if (-not (Test-Path -LiteralPath $entry -PathType Leaf)) {
         throw "未找到用户启动入口：$entry"
@@ -254,11 +261,105 @@ try {
     if (-not $process.WaitForExit(15000)) { throw '关闭完成页后工具未退出。' }
     if ($process.ExitCode -ne 0) { throw "工具退出码异常：$($process.ExitCode)" }
 
-    $jpgCount = @(Get-ChildItem -LiteralPath $OutputRoot -Filter '*.jpg' -File -Recurse -ErrorAction SilentlyContinue).Count
-    $psdCount = @(Get-ChildItem -LiteralPath $OutputRoot -Filter '*.psd' -File -Recurse -ErrorAction SilentlyContinue).Count
-    if ($jpgCount -lt 1 -or $psdCount -lt 1) { throw "成品数量异常：JPG=$jpgCount，PSD=$psdCount" }
-    Write-SmokeLog "PASS：JPG=$jpgCount，PSD=$psdCount。"
-    Set-Content -LiteralPath (Join-Path $ArtifactDir 'PASS.txt') -Value "JPG=$jpgCount`r`nPSD=$psdCount" -Encoding UTF8
+    $newTaskDirectories = @(
+        Get-ChildItem -LiteralPath $OutputRoot -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $existingTaskDirectoryPaths -notcontains $_.FullName }
+    )
+    if ($newTaskDirectories.Count -ne 1) {
+        throw "本次应只生成 1 个任务文件夹，实际生成 $($newTaskDirectories.Count) 个。"
+    }
+    $taskDirectory = $newTaskDirectories[0]
+    $jpgDirectory = Join-Path $taskDirectory.FullName 'JPG成品'
+    $psdDirectory = Join-Path $taskDirectory.FullName 'PSD源文件'
+    $recordDirectory = Join-Path $taskDirectory.FullName '任务记录'
+    foreach ($requiredDirectory in @($jpgDirectory, $psdDirectory, $recordDirectory)) {
+        if (-not (Test-Path -LiteralPath $requiredDirectory -PathType Container)) {
+            throw "缺少任务输出目录：$requiredDirectory"
+        }
+    }
+
+    $resultReport = Join-Path $recordDirectory '生成结果.csv'
+    foreach ($requiredRecord in @('任务信息.txt', '任务日志.txt', 'data.csv', 'data_全部记录.csv', '异常记录.csv', '生成结果.csv')) {
+        $requiredRecordPath = Join-Path $recordDirectory $requiredRecord
+        if (-not (Test-Path -LiteralPath $requiredRecordPath -PathType Leaf)) {
+            throw "缺少任务记录文件：$requiredRecordPath"
+        }
+    }
+
+    $resultRows = @(Import-Csv -LiteralPath $resultReport -Encoding UTF8)
+    if ($resultRows.Count -eq 0) { throw '生成结果.csv 没有商品结果。' }
+    if ($UseSingleProduct -and $resultRows.Count -ne 1) {
+        throw "单商品回归应产生 1 条结果，实际为 $($resultRows.Count) 条。"
+    }
+
+    $blockingStatuses = @('处理失败', '模板错误', '数据需核对', '缺图', '字段为空')
+    $criticalCodes = @('E_TEMPLATE_INVALID', 'E_MISSING_IMAGE', 'E_PRICE_INVALID', 'E_EMPTY_FIELD')
+    $blockingRows = @($resultRows | Where-Object {
+        $row = $_
+        ($blockingStatuses -contains [string]$row.状态) -or
+        @([string]$row.错误码 -split ';' | Where-Object { $criticalCodes -contains $_ }).Count -gt 0
+    })
+    if ($blockingRows.Count -gt 0) {
+        $details = ($blockingRows | ForEach-Object { "$($_.商品文件名)：$($_.状态) [$($_.错误码)]" }) -join '；'
+        throw "结果报告存在阻断错误：$details"
+    }
+
+    foreach ($row in $resultRows) {
+        foreach ($outputField in @('输出文件', '输出PSD')) {
+            $outputPath = [string]$row.$outputField
+            if ([string]::IsNullOrWhiteSpace($outputPath) -or -not (Test-Path -LiteralPath $outputPath -PathType Leaf)) {
+                throw "商品 $($row.商品文件名) 的$outputField不存在：$outputPath"
+            }
+        }
+    }
+
+    $jpgFiles = @(Get-ChildItem -LiteralPath $jpgDirectory -Filter '*.jpg' -File -ErrorAction SilentlyContinue)
+    $psdFiles = @(Get-ChildItem -LiteralPath $psdDirectory -Filter '*.psd' -File -ErrorAction SilentlyContinue)
+    if ($jpgFiles.Count -ne $resultRows.Count -or $psdFiles.Count -ne $resultRows.Count) {
+        throw "成品数与结果报告不一致：结果=$($resultRows.Count)，JPG=$($jpgFiles.Count)，PSD=$($psdFiles.Count)"
+    }
+
+    foreach ($jpg in $jpgFiles) {
+        $image = [System.Drawing.Image]::FromFile($jpg.FullName)
+        try {
+            if ($image.Width -lt 1 -or $image.Height -lt 1 -or $image.Width -ne $image.Height) {
+                throw "JPG 尺寸异常：$($jpg.FullName)，$($image.Width)x$($image.Height)"
+            }
+        } finally {
+            $image.Dispose()
+        }
+    }
+    foreach ($psd in $psdFiles) {
+        $stream = [System.IO.File]::OpenRead($psd.FullName)
+        try {
+            $header = New-Object byte[] 4
+            if ($stream.Read($header, 0, 4) -ne 4 -or [System.Text.Encoding]::ASCII.GetString($header) -ne '8BPS') {
+                throw "PSD 文件头无效：$($psd.FullName)"
+            }
+        } finally {
+            $stream.Dispose()
+        }
+    }
+
+    $globalStatusPath = Join-Path $env:LOCALAPPDATA '电商主图套版工具\任务记录\status.json'
+    if (-not (Test-Path -LiteralPath $globalStatusPath -PathType Leaf)) {
+        throw "缺少工具最终状态：$globalStatusPath"
+    }
+    $globalStatus = Get-Content -LiteralPath $globalStatusPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($globalStatus.status -notin @('success', 'needs_review') -or [int]$globalStatus.exitCode -ne 0) {
+        throw "工具最终状态异常：status=$($globalStatus.status)，exitCode=$($globalStatus.exitCode)"
+    }
+
+    Copy-Item -LiteralPath $jpgFiles[0].FullName -Destination (Join-Path $ArtifactDir '05-导出成品.jpg') -Force
+    $warningCodes = @(
+        $resultRows |
+            ForEach-Object { [string]$_.错误码 -split ';' } |
+            Where-Object { $_ -like 'W_*' } |
+            Sort-Object -Unique
+    )
+    $warningText = if ($warningCodes.Count -gt 0) { $warningCodes -join ',' } else { 'none' }
+    Write-SmokeLog "PASS：结果=$($resultRows.Count)，JPG=$($jpgFiles.Count)，PSD=$($psdFiles.Count)，status=$($globalStatus.status)，warnings=$warningText。"
+    Set-Content -LiteralPath (Join-Path $ArtifactDir 'PASS.txt') -Value "Results=$($resultRows.Count)`r`nJPG=$($jpgFiles.Count)`r`nPSD=$($psdFiles.Count)`r`nStatus=$($globalStatus.status)`r`nWarnings=$warningText" -Encoding UTF8
 } catch {
     Write-SmokeLog "FAIL：$($_.Exception.Message)"
     try { Capture-Desktop -Name 'FAIL.png' } catch {}
