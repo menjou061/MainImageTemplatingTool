@@ -76,3 +76,9 @@ v1.0 已在 Adobe Photoshop 2026（27.2）完成全流程验证。其他 Windows
 ```
 
 需要开发同事排查时，提供本次成品目录中的 `任务记录` 文件夹；如果没有生成任务目录，再提供上面的工具级任务记录目录。
+
+如果双击 `开始套版.cmd` 后主界面完全没有出现，再提供最早期启动日志：
+
+```text
+%LOCALAPPDATA%\MainImageTemplatingTool\startup
+```

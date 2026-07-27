@@ -171,9 +171,12 @@ function Write-ControlSnapshot {
 
 try {
     Write-SmokeLog '开始 Windows 界面回归。'
-    $runner = Join-Path $ToolRoot '_internal\L0_Run.ps1'
-    $arguments = @('-NoLogo', '-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-File', ('"{0}"' -f $runner))
-    $process = Start-Process -FilePath 'powershell.exe' -ArgumentList ($arguments -join ' ') -WindowStyle Minimized -PassThru
+    $entry = Join-Path $ToolRoot '开始套版.cmd'
+    if (-not (Test-Path -LiteralPath $entry -PathType Leaf)) {
+        throw "未找到用户启动入口：$entry"
+    }
+    $arguments = '/d /c call "{0}"' -f $entry
+    $process = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\cmd.exe') -ArgumentList $arguments -WindowStyle Normal -PassThru
 
     $mainWindow = Wait-DesktopWindow -Title '电商主图套版工具 1.0' -TimeoutSeconds 45
     Show-AutomationWindow -Window $mainWindow

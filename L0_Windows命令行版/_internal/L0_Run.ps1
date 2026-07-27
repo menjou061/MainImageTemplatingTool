@@ -1220,6 +1220,7 @@ function Invoke-Python {
     )
     $allArgs = @()
     $allArgs += $Python.PrefixArgs
+    $allArgs += '-B'
     $allArgs += $Arguments
     & $Python.Command @allArgs
 }

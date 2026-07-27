@@ -35,6 +35,8 @@
 
 异常商品会自动跳过，原因记录在 `任务记录/异常记录.csv` 中，不会反复弹出长错误信息。
 
+如果双击 `开始套版.cmd` 后主界面完全没有出现，最早期启动日志保存在 `%LOCALAPPDATA%\MainImageTemplatingTool\startup`；进入主程序后的任务记录仍保存在 `%LOCALAPPDATA%\电商主图套版工具\任务记录`。
+
 ## 使用要求
 
 - Windows 10 x64 或更高版本
