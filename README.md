@@ -7,7 +7,7 @@
 ## 下载与安装
 
 1. 打开 [Releases](https://github.com/menjou061/MainImageTemplatingTool/releases/latest)。
-2. 下载 `电商主图套版工具_Windows_v1.0.0.zip`。
+2. 下载 `MainImageTemplatingTool_Windows_v1.0.0.zip`。
 3. 把 ZIP 完整解压到本地文件夹，不要直接在压缩包里运行。
 4. 确认 Windows 已安装并登录 Adobe Photoshop。
 5. 双击 `开始套版.cmd`。
