@@ -6,14 +6,7 @@
  */
 
 var REPORT_NAME = "结果报告.csv";
-// The product smart object in this template contains a full transparent
-// canvas, so its own bounds are not a usable layout frame. Keep one stable
-// product zone in canvas-relative coordinates and reserve the lower price bar.
-var PRODUCT_SAFE_LEFT_RATIO = 0.18;
-var PRODUCT_SAFE_TOP_RATIO = 0.12;
-var PRODUCT_SAFE_RIGHT_RATIO = 0.81;
-var PRODUCT_SAFE_BOTTOM_RATIO = 0.75;
-var PRODUCT_SAFE_SCALE = 0.98;
+var PRODUCT_VERTICAL_OFFSET_PX = 32;
 var CONTINUE_WITH_PREFLIGHT_ISSUES = !!($.global.__BATCH_INPUTS__ && $.global.__BATCH_INPUTS__.continueWithPreflightIssues);
 
 function trimText(value) {
@@ -630,56 +623,28 @@ function visiblePixelRect(layer) {
     }
 }
 
-function fixedProductSafeRect(document) {
-    var width = document.width.as("px");
-    var height = document.height.as("px");
-    return {
-        left: width * PRODUCT_SAFE_LEFT_RATIO,
-        top: height * PRODUCT_SAFE_TOP_RATIO,
-        right: width * PRODUCT_SAFE_RIGHT_RATIO,
-        bottom: height * PRODUCT_SAFE_BOTTOM_RATIO
-    };
-}
-
-function fitProductToSafeFrame(layer, targetRect) {
-    var document = app.activeDocument;
-    var safeRect = fixedProductSafeRect(document);
-    // Use the visible product pixels, not the full transparent source canvas.
+function fitProductToTemplateFrame(layer, targetRect) {
+    // Use visible product pixels so transparent padding in a source PNG does
+    // not make the product appear smaller than the PSD designer intended.
     var currentRect = visiblePixelRect(layer);
     var currentWidth = currentRect.right - currentRect.left;
     var currentHeight = currentRect.bottom - currentRect.top;
-    var targetWidth = (safeRect.right - safeRect.left) * PRODUCT_SAFE_SCALE;
-    var targetHeight = (safeRect.bottom - safeRect.top) * PRODUCT_SAFE_SCALE;
+    var targetWidth = targetRect.right - targetRect.left;
+    var targetHeight = targetRect.bottom - targetRect.top;
     if (currentWidth <= 0 || currentHeight <= 0 || targetWidth <= 0 || targetHeight <= 0) {
-        throw new Error("商品图安全框尺寸无效");
+        throw new Error("商品图展示框尺寸无效");
     }
-    // Scale the actual product to fill the central design zone. The hard
-    // bottom edge leaves the price bar untouched even for tall source images.
     var scale = Math.min(targetWidth / currentWidth, targetHeight / currentHeight);
     if (Math.abs(scale - 1) > 0.001) {
         layer.resize(scale * 100, scale * 100, AnchorPosition.MIDDLECENTER);
     }
     currentRect = visiblePixelRect(layer);
-    safeRect = {
-        left: (safeRect.left + safeRect.right - targetWidth) / 2,
-        top: (safeRect.top + safeRect.bottom - targetHeight) / 2,
-        right: (safeRect.left + safeRect.right + targetWidth) / 2,
-        bottom: (safeRect.top + safeRect.bottom + targetHeight) / 2
-    };
     var currentCenterX = (currentRect.left + currentRect.right) / 2;
     var currentCenterY = (currentRect.top + currentRect.bottom) / 2;
-    var targetCenterX = (safeRect.left + safeRect.right) / 2;
-    var targetCenterY = (safeRect.top + safeRect.bottom) / 2;
+    var targetCenterX = (targetRect.left + targetRect.right) / 2;
+    var targetCenterY = (targetRect.top + targetRect.bottom) / 2;
     var shiftX = targetCenterX - currentCenterX;
-    var shiftY = targetCenterY - currentCenterY;
-    var visibleWidth = currentRect.right - currentRect.left;
-    var visibleHeight = currentRect.bottom - currentRect.top;
-    if (visibleWidth <= targetWidth) {
-        shiftX = Math.max(safeRect.left - currentRect.left, Math.min(safeRect.right - currentRect.right, shiftX));
-    }
-    if (visibleHeight <= targetHeight) {
-        shiftY = Math.max(safeRect.top - currentRect.top, Math.min(safeRect.bottom - currentRect.bottom, shiftY));
-    }
+    var shiftY = targetCenterY - currentCenterY + PRODUCT_VERTICAL_OFFSET_PX;
     layer.translate(UnitValue(shiftX, "px"), UnitValue(shiftY, "px"));
     return Math.abs(scale - 1) > 0.001 || Math.abs(shiftX) > 0.5 || Math.abs(shiftY) > 0.5;
 }
@@ -757,8 +722,8 @@ function setImageLayer(layer, value, key, record, materialIndex, result) {
         var targetRect = layerRect(layer);
         replaceSmartObject(layer, imageFile);
         if (key === "商品图") {
-            var resized = fitProductToSafeFrame(layer, targetRect);
-            addIssue(result, resized ? "商品图已按安全框定位" : "商品图已居中");
+            var resized = fitProductToTemplateFrame(layer, targetRect);
+            addIssue(result, resized ? "商品图已按 PSD 展示框定位" : "商品图已按 PSD 展示框居中");
         } else {
             fitOptionalImageToTemplateFrame(layer, targetRect);
             markOptionalImageReplacement(result, key, true);

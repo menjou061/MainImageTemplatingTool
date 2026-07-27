@@ -24,13 +24,19 @@ $script:Stage = '入口初始化'
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $script:InternalDir = $scriptDir
 $baseDir = Split-Path -Parent $scriptDir
-$diagnosticDir = Join-Path $baseDir '_diagnostics'
+$userDataRoot = if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+    Join-Path $env:LOCALAPPDATA '电商主图套版工具'
+} else {
+    Join-Path $baseDir '_user_data'
+}
+$diagnosticDir = Join-Path $userDataRoot '任务记录'
 $entryReportTxt = Join-Path $diagnosticDir 'failure.txt'
 $entryReportCsv = Join-Path $diagnosticDir 'failure.csv'
 $entryStatusJson = Join-Path $diagnosticDir 'status.json'
 $entryStatusTxt = Join-Path $diagnosticDir 'status.txt'
 $runtimeProbeTxt = Join-Path $diagnosticDir 'runtime_probe.txt'
-$settingsPath = Join-Path $baseDir '_settings.json'
+$settingsPath = Join-Path $userDataRoot 'settings.json'
+$taskHistoryPath = Join-Path $diagnosticDir '任务历史.csv'
 $ps1Marker = Join-Path $diagnosticDir 'ps1_started.marker'
 $cleanScript = Join-Path $scriptDir 'clean_data.py'
 $sheetScript = Join-Path $scriptDir 'l0_list_sheets.py'
@@ -46,6 +52,7 @@ $requiredPythonVersion = '3.11.9'
 $requiredOpenpyxlVersion = '3.1.5'
 $requiredEtXmlfileVersion = '2.0.0'
 $taskOutputDir = $null
+$taskRecordDir = $null
 $reportPath = $null
 $script:Settings = $null
 $script:ProgressForm = $null
@@ -53,6 +60,10 @@ $script:ProgressStageLabel = $null
 $script:ProgressDetailLabel = $null
 $script:LoadedTaskSettingsExcelPath = ''
 $generationStartedAt = $null
+$script:CurrentExcelPath = ''
+$script:CurrentPsdPath = ''
+$script:CurrentSheetName = ''
+$script:CurrentProductName = ''
 
 function Write-Utf8Bom {
     param(
@@ -132,6 +143,76 @@ function Write-EntryFailureReport {
     ) -join [Environment]::NewLine
     Write-Utf8Bom -Path $entryReportCsv -Content ($csv + [Environment]::NewLine)
     Write-EntryStatus -Status 'failed' -Message $ErrorSummary
+}
+
+function Get-DefaultOutputRoot {
+    $desktop = [Environment]::GetFolderPath([Environment+SpecialFolder]::DesktopDirectory)
+    if ([string]::IsNullOrWhiteSpace($desktop)) {
+        $desktop = [Environment]::GetFolderPath([Environment+SpecialFolder]::MyPictures)
+    }
+    if ([string]::IsNullOrWhiteSpace($desktop)) {
+        $desktop = $baseDir
+    }
+    return (Join-Path $desktop '电商主图套版成品')
+}
+
+function ConvertTo-SafePathPart {
+    param([string]$Value)
+    $text = if ([string]::IsNullOrWhiteSpace($Value)) { '全部商品' } else { $Value.Trim() }
+    foreach ($character in [System.IO.Path]::GetInvalidFileNameChars()) {
+        $text = $text.Replace([string]$character, '_')
+    }
+    $text = $text -replace '\s+', '_'
+    if ($text.Length -gt 40) {
+        $text = $text.Substring(0, 40)
+    }
+    $text = $text.Trim(' ', '.', '_')
+    if ([string]::IsNullOrWhiteSpace($text)) { return '任务' }
+    return $text
+}
+
+function New-TaskOutputDirectory {
+    param(
+        [string]$OutputRoot,
+        [string]$SheetName
+    )
+    $baseName = '套版成品_{0}_{1}' -f (Get-Date).ToString('yyyy-MM-dd_HHmmss'), (ConvertTo-SafePathPart $SheetName)
+    $candidate = Join-Path $OutputRoot $baseName
+    $suffix = 1
+    while (Test-Path -LiteralPath $candidate) {
+        $candidate = Join-Path $OutputRoot ("{0}_{1}" -f $baseName, $suffix)
+        $suffix++
+    }
+    New-Item -Path $candidate -ItemType Directory -Force | Out-Null
+    return $candidate
+}
+
+function Write-TaskHistory {
+    param(
+        [string]$Status,
+        [string]$Message
+    )
+    try {
+        New-Item -Path $diagnosticDir -ItemType Directory -Force | Out-Null
+        $row = [pscustomobject][ordered]@{
+            '时间' = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+            '状态' = $Status
+            '当前阶段' = $script:Stage
+            '工作表' = $script:CurrentSheetName
+            '商品范围' = if ([string]::IsNullOrWhiteSpace($script:CurrentProductName)) { '全部商品' } else { $script:CurrentProductName }
+            '商品表格' = $script:CurrentExcelPath
+            'PSD模板' = $script:CurrentPsdPath
+            '任务文件夹' = if ($taskOutputDir) { $taskOutputDir } else { '' }
+            '说明' = $Message
+        }
+        if (Test-Path -LiteralPath $taskHistoryPath -PathType Leaf) {
+            $row | Export-Csv -LiteralPath $taskHistoryPath -NoTypeInformation -Encoding UTF8 -Append
+        } else {
+            $row | Export-Csv -LiteralPath $taskHistoryPath -NoTypeInformation -Encoding UTF8
+        }
+    } catch {
+        Add-Log "写入任务历史失败：$($_.Exception.Message)"
+    }
 }
 
 function Clear-StaleDiagnostics {
@@ -671,134 +752,149 @@ function Select-TaskSettings {
     )
 
     $form = New-Object System.Windows.Forms.Form
-    $form.Text = '电商主图批量套版设置'
+    $form.Text = '电商主图套版工具 1.0'
     $form.StartPosition = 'CenterScreen'
-    $form.Size = New-Object System.Drawing.Size(820, 560)
-    $form.MinimumSize = New-Object System.Drawing.Size(820, 560)
+    $form.Size = New-Object System.Drawing.Size(860, 610)
+    $form.MinimumSize = New-Object System.Drawing.Size(860, 610)
     $form.MinimizeBox = $false
     $form.MaximizeBox = $false
+    $form.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
 
     $title = New-Object System.Windows.Forms.Label
-    $title.Text = '请确认本次要生成的内容。点击开始前都可以修改。'
+    $title.Text = '选择商品表格和 PSD 模板，确认商品范围后即可开始。'
+    $title.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 11, [System.Drawing.FontStyle]::Bold)
     $title.AutoSize = $true
     $title.Location = New-Object System.Drawing.Point(16, 16)
     $form.Controls.Add($title)
 
     $excelLabel = New-Object System.Windows.Forms.Label
-    $excelLabel.Text = '商品信息表格'
+    $excelLabel.Text = '1  商品信息表格'
     $excelLabel.AutoSize = $true
     $excelLabel.Location = New-Object System.Drawing.Point(16, 55)
     $form.Controls.Add($excelLabel)
 
     $excelBox = New-Object System.Windows.Forms.TextBox
     $excelBox.Location = New-Object System.Drawing.Point(125, 52)
-    $excelBox.Size = New-Object System.Drawing.Size(555, 24)
+    $excelBox.Size = New-Object System.Drawing.Size(585, 24)
     $excelBox.Text = $InitialExcelPath
     $form.Controls.Add($excelBox)
 
     $excelBrowse = New-Object System.Windows.Forms.Button
-    $excelBrowse.Text = '选择表格'
-    $excelBrowse.Location = New-Object System.Drawing.Point(695, 50)
-    $excelBrowse.Size = New-Object System.Drawing.Size(80, 28)
+    $excelBrowse.Text = '浏览...'
+    $excelBrowse.Location = New-Object System.Drawing.Point(725, 50)
+    $excelBrowse.Size = New-Object System.Drawing.Size(88, 28)
     $form.Controls.Add($excelBrowse)
 
     $psdLabel = New-Object System.Windows.Forms.Label
-    $psdLabel.Text = '主图模板'
+    $psdLabel.Text = '2  PSD 模板'
     $psdLabel.AutoSize = $true
     $psdLabel.Location = New-Object System.Drawing.Point(16, 93)
     $form.Controls.Add($psdLabel)
 
     $psdBox = New-Object System.Windows.Forms.TextBox
     $psdBox.Location = New-Object System.Drawing.Point(125, 90)
-    $psdBox.Size = New-Object System.Drawing.Size(555, 24)
+    $psdBox.Size = New-Object System.Drawing.Size(585, 24)
     $psdBox.Text = $InitialPsdPath
     $form.Controls.Add($psdBox)
 
     $psdBrowse = New-Object System.Windows.Forms.Button
-    $psdBrowse.Text = '选择模板'
-    $psdBrowse.Location = New-Object System.Drawing.Point(695, 88)
-    $psdBrowse.Size = New-Object System.Drawing.Size(80, 28)
+    $psdBrowse.Text = '浏览...'
+    $psdBrowse.Location = New-Object System.Drawing.Point(725, 88)
+    $psdBrowse.Size = New-Object System.Drawing.Size(88, 28)
     $form.Controls.Add($psdBrowse)
 
     $outputLabel = New-Object System.Windows.Forms.Label
-    $outputLabel.Text = '成品保存位置'
+    $outputLabel.Text = '成品保存到'
     $outputLabel.AutoSize = $true
     $outputLabel.Location = New-Object System.Drawing.Point(16, 131)
     $form.Controls.Add($outputLabel)
 
     $outputBox = New-Object System.Windows.Forms.TextBox
     $outputBox.Location = New-Object System.Drawing.Point(125, 128)
-    $outputBox.Size = New-Object System.Drawing.Size(555, 24)
+    $outputBox.Size = New-Object System.Drawing.Size(480, 24)
     $outputBox.Text = $InitialOutputRoot
     $form.Controls.Add($outputBox)
 
     $outputBrowse = New-Object System.Windows.Forms.Button
-    $outputBrowse.Text = '选择位置'
-    $outputBrowse.Location = New-Object System.Drawing.Point(695, 126)
-    $outputBrowse.Size = New-Object System.Drawing.Size(80, 28)
+    $outputBrowse.Text = '更改...'
+    $outputBrowse.Location = New-Object System.Drawing.Point(620, 126)
+    $outputBrowse.Size = New-Object System.Drawing.Size(88, 28)
     $form.Controls.Add($outputBrowse)
 
+    $openOutputButton = New-Object System.Windows.Forms.Button
+    $openOutputButton.Text = '打开位置'
+    $openOutputButton.Location = New-Object System.Drawing.Point(725, 126)
+    $openOutputButton.Size = New-Object System.Drawing.Size(88, 28)
+    $form.Controls.Add($openOutputButton)
+
+    $outputHint = New-Object System.Windows.Forms.Label
+    $outputHint.Text = '每次任务会自动新建文件夹，不会覆盖以前的成品。'
+    $outputHint.AutoSize = $true
+    $outputHint.ForeColor = [System.Drawing.Color]::DimGray
+    $outputHint.Location = New-Object System.Drawing.Point(125, 158)
+    $form.Controls.Add($outputHint)
+
     $sheetLabel = New-Object System.Windows.Forms.Label
-    $sheetLabel.Text = '数据工作表'
+    $sheetLabel.Text = '3  数据工作表'
     $sheetLabel.AutoSize = $true
-    $sheetLabel.Location = New-Object System.Drawing.Point(16, 177)
+    $sheetLabel.Location = New-Object System.Drawing.Point(16, 195)
     $form.Controls.Add($sheetLabel)
 
     $sheetCombo = New-Object System.Windows.Forms.ComboBox
-    $sheetCombo.Location = New-Object System.Drawing.Point(125, 174)
+    $sheetCombo.Location = New-Object System.Drawing.Point(125, 192)
     $sheetCombo.Size = New-Object System.Drawing.Size(300, 26)
     $sheetCombo.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
     $form.Controls.Add($sheetCombo)
 
     $reloadButton = New-Object System.Windows.Forms.Button
-    $reloadButton.Text = '读取工作表'
-    $reloadButton.Location = New-Object System.Drawing.Point(440, 172)
-    $reloadButton.Size = New-Object System.Drawing.Size(110, 28)
+    $reloadButton.Text = '重新读取'
+    $reloadButton.Location = New-Object System.Drawing.Point(440, 190)
+    $reloadButton.Size = New-Object System.Drawing.Size(96, 28)
     $form.Controls.Add($reloadButton)
 
     $productLabel = New-Object System.Windows.Forms.Label
-    $productLabel.Text = '要生成的商品'
+    $productLabel.Text = '4  商品范围'
     $productLabel.AutoSize = $true
-    $productLabel.Location = New-Object System.Drawing.Point(16, 225)
+    $productLabel.Location = New-Object System.Drawing.Point(16, 243)
     $form.Controls.Add($productLabel)
 
     $allProductsRadio = New-Object System.Windows.Forms.RadioButton
     $allProductsRadio.Text = '全部商品'
     $allProductsRadio.AutoSize = $true
-    $allProductsRadio.Location = New-Object System.Drawing.Point(125, 223)
+    $allProductsRadio.Location = New-Object System.Drawing.Point(125, 241)
     $form.Controls.Add($allProductsRadio)
 
     $singleProductRadio = New-Object System.Windows.Forms.RadioButton
-    $singleProductRadio.Text = '选择部分商品（可多选）'
+    $singleProductRadio.Text = '只生成勾选的商品'
     $singleProductRadio.AutoSize = $true
-    $singleProductRadio.Location = New-Object System.Drawing.Point(225, 223)
+    $singleProductRadio.Location = New-Object System.Drawing.Point(225, 241)
     $form.Controls.Add($singleProductRadio)
 
-    $productList = New-Object System.Windows.Forms.ListBox
-    $productList.Location = New-Object System.Drawing.Point(125, 255)
-    $productList.Size = New-Object System.Drawing.Size(560, 145)
-    $productList.SelectionMode = [System.Windows.Forms.SelectionMode]::MultiExtended
+    $productList = New-Object System.Windows.Forms.CheckedListBox
+    $productList.Location = New-Object System.Drawing.Point(125, 273)
+    $productList.Size = New-Object System.Drawing.Size(688, 166)
+    $productList.CheckOnClick = $true
     $productList.Enabled = $false
     $form.Controls.Add($productList)
 
     $statusLabel = New-Object System.Windows.Forms.Label
-    $statusLabel.Text = '选择表格后，点击“读取工作表”。'
+    $statusLabel.Text = '请先选择商品信息表格。'
     $statusLabel.AutoEllipsis = $true
-    $statusLabel.Size = New-Object System.Drawing.Size(755, 42)
-    $statusLabel.Location = New-Object System.Drawing.Point(16, 410)
+    $statusLabel.Size = New-Object System.Drawing.Size(797, 42)
+    $statusLabel.Location = New-Object System.Drawing.Point(16, 454)
     $form.Controls.Add($statusLabel)
 
     $runButton = New-Object System.Windows.Forms.Button
-    $runButton.Text = '检查并开始生成'
-    $runButton.Location = New-Object System.Drawing.Point(550, 465)
-    $runButton.Size = New-Object System.Drawing.Size(130, 34)
+    $runButton.Text = '开始生成'
+    $runButton.Location = New-Object System.Drawing.Point(570, 510)
+    $runButton.Size = New-Object System.Drawing.Size(138, 36)
     $form.Controls.Add($runButton)
     $form.AcceptButton = $runButton
 
     $cancelButton = New-Object System.Windows.Forms.Button
     $cancelButton.Text = '取消'
-    $cancelButton.Location = New-Object System.Drawing.Point(695, 465)
-    $cancelButton.Size = New-Object System.Drawing.Size(80, 34)
+    $cancelButton.Location = New-Object System.Drawing.Point(725, 510)
+    $cancelButton.Size = New-Object System.Drawing.Size(88, 36)
     $form.Controls.Add($cancelButton)
     $form.CancelButton = $cancelButton
 
@@ -818,6 +914,7 @@ function Select-TaskSettings {
         $excelBrowse.Enabled = -not $Busy
         $psdBrowse.Enabled = -not $Busy
         $outputBrowse.Enabled = -not $Busy
+        $openOutputButton.Enabled = -not $Busy
         $reloadButton.Enabled = -not $Busy
         $runButton.Enabled = -not $Busy
         [System.Windows.Forms.Application]::DoEvents()
@@ -849,14 +946,14 @@ function Select-TaskSettings {
                 foreach ($preferred in $preferredProducts) {
                     $matchIndex = $productList.Items.IndexOf($preferred)
                     if ($matchIndex -ge 0) {
-                        $productList.SetSelected($matchIndex, $true)
+                        $productList.SetItemChecked($matchIndex, $true)
                     }
                 }
-                if ($productList.SelectedItems.Count -gt 0) { $singleProductRadio.Checked = $true }
+                if ($productList.CheckedItems.Count -gt 0) { $singleProductRadio.Checked = $true }
             }
         }
         $productList.Enabled = ($singleProductRadio.Checked -and $singleProductRadio.Enabled)
-        $statusLabel.Text = "已读取商品任务列表：$($productList.Items.Count) 个。指定商品时可按 Ctrl 或 Shift 多选。"
+        $statusLabel.Text = "表格读取完成：$($productList.Items.Count) 个商品。默认生成全部商品。"
         return $true
     }
 
@@ -942,6 +1039,16 @@ function Select-TaskSettings {
         }
     })
 
+    $openOutputButton.Add_Click({
+        $path = $outputBox.Text.Trim()
+        try {
+            Assert-WritableDirectory -Path $path -Purpose '成品保存位置'
+            Start-Process -FilePath $path
+        } catch {
+            $statusLabel.Text = "无法打开保存位置：$($_.Exception.Message)"
+        }
+    })
+
     $reloadButton.Add_Click({
         [void](& $loadSheets ([string]$sheetCombo.SelectedItem) '')
     })
@@ -963,36 +1070,35 @@ function Select-TaskSettings {
         $candidatePsd = $psdBox.Text.Trim()
         $candidateOutput = $outputBox.Text.Trim()
         if (-not (Test-Path -LiteralPath $candidateExcel -PathType Leaf)) {
-            [System.Windows.Forms.MessageBox]::Show("Excel 文件不存在或不可访问：$candidateExcel", $form.Text) | Out-Null
+            $statusLabel.Text = '请重新选择可访问的 Excel 商品信息表格。'
             return
         }
         if ($candidateExcel -ne $script:LoadedTaskSettingsExcelPath) {
-            [System.Windows.Forms.MessageBox]::Show('表格已更换，请先读取工作表。', $form.Text) | Out-Null
-            return
+            if (-not (& $loadSheets '' '')) { return }
         }
         if (-not (Test-Path -LiteralPath $candidatePsd -PathType Leaf)) {
-            [System.Windows.Forms.MessageBox]::Show("PSD 模板不存在或不可访问：$candidatePsd", $form.Text) | Out-Null
+            $statusLabel.Text = '请重新选择可访问的 PSD 模板。'
             return
         }
         if ([string]::IsNullOrWhiteSpace($candidateOutput)) {
-            [System.Windows.Forms.MessageBox]::Show('输出保存位置不能为空。', $form.Text) | Out-Null
-            return
+            $candidateOutput = Get-DefaultOutputRoot
+            $outputBox.Text = $candidateOutput
         }
         try {
             Assert-WritableDirectory -Path $candidateOutput -Purpose '输出保存位置'
         } catch {
-            [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, $form.Text) | Out-Null
+            $statusLabel.Text = "成品保存位置不可用：$($_.Exception.Message)"
             return
         }
         if (-not $sheetCombo.SelectedItem) {
-            [System.Windows.Forms.MessageBox]::Show('请选择数据工作表。', $form.Text) | Out-Null
+            $statusLabel.Text = '请选择数据工作表。'
             return
         }
         $candidateProduct = ''
         if ($singleProductRadio.Checked) {
-            $selectedProducts = @($productList.SelectedItems | ForEach-Object { [string]$_ })
+            $selectedProducts = @($productList.CheckedItems | ForEach-Object { [string]$_ })
             if ($selectedProducts.Count -eq 0) {
-                [System.Windows.Forms.MessageBox]::Show('请至少选择一个商品，或改选全部商品。', $form.Text) | Out-Null
+                $statusLabel.Text = '请勾选至少一个商品，或改选“全部商品”。'
                 return
             }
             $candidateProduct = $selectedProducts -join '|'
@@ -1027,83 +1133,6 @@ function Select-TaskSettings {
         return $form.Tag
     }
     return $null
-}
-
-function Confirm-PreflightIssues {
-    param(
-        [object[]]$ErrorRows,
-        [int]$ValidCount,
-        [string]$ErrorCsv
-    )
-
-    if ($ErrorRows.Count -eq 0) {
-        return 'valid_only'
-    }
-
-    $details = @($ErrorRows | Select-Object -First 10 | ForEach-Object {
-        $product = [string]$_.商品文件名
-        $reason = if ([string]::IsNullOrWhiteSpace([string]$_.异常详情)) { [string]$_.异常类型 } else { [string]$_.异常详情 }
-        "$product：$reason"
-    })
-    $remaining = $ErrorRows.Count - $details.Count
-    if ($remaining -gt 0) {
-        $details += "另有 $remaining 条，请查看异常记录.csv。"
-    }
-
-    $form = New-Object System.Windows.Forms.Form
-    $form.Text = '生成前检查'
-    $form.StartPosition = 'CenterScreen'
-    $form.Size = New-Object System.Drawing.Size(800, 470)
-    $form.MinimizeBox = $false
-    $form.MaximizeBox = $false
-
-    $summary = New-Object System.Windows.Forms.Label
-    $summary.Text = "发现 $($ErrorRows.Count) 条需核对记录；$ValidCount 条无问题商品。"
-    $summary.AutoSize = $true
-    $summary.Location = New-Object System.Drawing.Point(18, 18)
-    $form.Controls.Add($summary)
-
-    $hint = New-Object System.Windows.Forms.Label
-    $hint.Text = '可只生成无问题商品，也可按表格内容继续生成全部商品。继续生成时，问题会保留在结果报告中。'
-    $hint.AutoSize = $true
-    $hint.Location = New-Object System.Drawing.Point(18, 46)
-    $form.Controls.Add($hint)
-
-    $detailsBox = New-Object System.Windows.Forms.TextBox
-    $detailsBox.Multiline = $true
-    $detailsBox.ReadOnly = $true
-    $detailsBox.ScrollBars = [System.Windows.Forms.ScrollBars]::Vertical
-    $detailsBox.WordWrap = $true
-    $detailsBox.Text = ($details -join [Environment]::NewLine) + [Environment]::NewLine + [Environment]::NewLine + "完整清单：$ErrorCsv"
-    $detailsBox.Location = New-Object System.Drawing.Point(18, 76)
-    $detailsBox.Size = New-Object System.Drawing.Size(748, 270)
-    $form.Controls.Add($detailsBox)
-
-    $continueButton = New-Object System.Windows.Forms.Button
-    $continueButton.Text = '只生成无问题商品'
-    $continueButton.Location = New-Object System.Drawing.Point(374, 382)
-    $continueButton.Size = New-Object System.Drawing.Size(142, 32)
-    $continueButton.Add_Click({ $form.Tag = 'valid_only'; $form.DialogResult = [System.Windows.Forms.DialogResult]::OK; $form.Close() })
-    $form.Controls.Add($continueButton)
-    $form.AcceptButton = $continueButton
-
-    $cancelButton = New-Object System.Windows.Forms.Button
-    $cancelButton.Text = '返回修改'
-    $allButton = New-Object System.Windows.Forms.Button
-    $allButton.Text = '按表格内容继续生成'
-    $allButton.Location = New-Object System.Drawing.Point(526, 382)
-    $allButton.Size = New-Object System.Drawing.Size(156, 32)
-    $allButton.Add_Click({ $form.Tag = 'all_rows'; $form.DialogResult = [System.Windows.Forms.DialogResult]::OK; $form.Close() })
-    $form.Controls.Add($allButton)
-
-    $cancelButton.Location = New-Object System.Drawing.Point(692, 382)
-    $cancelButton.Size = New-Object System.Drawing.Size(82, 32)
-    $cancelButton.Add_Click({ $form.Tag = 'cancel'; $form.DialogResult = [System.Windows.Forms.DialogResult]::Cancel; $form.Close() })
-    $form.Controls.Add($cancelButton)
-    $form.CancelButton = $cancelButton
-
-    [void]$form.ShowDialog()
-    return [string]$form.Tag
 }
 
 function New-PythonCandidate {
@@ -1602,6 +1631,8 @@ try {
 
         if ([string]::IsNullOrWhiteSpace($OutputRoot)) { throw '命令行模式缺少 -OutputRoot。' }
         $outputRoot = $OutputRoot
+        $sheetName = $SheetName
+        $selectedProduct = $ProductName
         Add-Log "命令行指定输出目录：$outputRoot"
         Assert-WritableDirectory -Path $outputRoot -Purpose '输出保存位置'
     } else {
@@ -1609,10 +1640,15 @@ try {
         $initialExcelPath = if (-not [string]::IsNullOrWhiteSpace($ExcelPath)) { $ExcelPath } else { Get-SettingText -Settings $script:Settings -Name 'excelPath' }
         $initialPsdPath = if (-not [string]::IsNullOrWhiteSpace($PsdPath)) { $PsdPath } else { Get-SettingText -Settings $script:Settings -Name 'psdPath' }
         $initialOutputRoot = if (-not [string]::IsNullOrWhiteSpace($OutputRoot)) { $OutputRoot } else { Get-SettingText -Settings $script:Settings -Name 'outputRoot' }
+        if ([string]::IsNullOrWhiteSpace($initialOutputRoot)) { $initialOutputRoot = Get-DefaultOutputRoot }
         $initialSheetName = if (-not [string]::IsNullOrWhiteSpace($SheetName)) { $SheetName } else { Get-SettingText -Settings $script:Settings -Name 'sheetName' }
         $initialProductName = if (-not [string]::IsNullOrWhiteSpace($ProductName)) { $ProductName } else { Get-SettingText -Settings $script:Settings -Name 'productName' }
         $taskSettings = Select-TaskSettings -Python $python -InitialExcelPath $initialExcelPath -InitialPsdPath $initialPsdPath -InitialOutputRoot $initialOutputRoot -InitialSheetName $initialSheetName -InitialProductName $initialProductName
-        if (-not $taskSettings) { throw '已取消：未确认任务设置。' }
+        if (-not $taskSettings) {
+            Write-EntryStatus -Status 'cancelled' -Message '用户取消了本次任务。'
+            Write-TaskHistory -Status '已取消' -Message '用户在任务设置窗口取消。'
+            exit 0
+        }
         $excelPath = $taskSettings.ExcelPath
         $psdPath = $taskSettings.PsdPath
         $outputRoot = $taskSettings.OutputRoot
@@ -1625,25 +1661,33 @@ try {
         Add-Log "窗口确认商品任务：$(if ($selectedProduct) { $selectedProduct } else { '全部商品' })"
     }
 
+    $script:CurrentExcelPath = $excelPath
+    $script:CurrentPsdPath = $psdPath
+    $script:CurrentSheetName = $sheetName
+    $script:CurrentProductName = $selectedProduct
+
     Set-RunProgress -Stage '检测 PSD 模板' -Detail '正在检查所选 PSD 是否已按智能化套版规范改造。'
     $photoshop = Start-Photoshop
     $preparedPsdPath = Resolve-TemplateForTask -Application $photoshop -TemplatePath $psdPath
     if ($preparedPsdPath -ne $psdPath) {
         $psdPath = $preparedPsdPath
+        $script:CurrentPsdPath = $psdPath
         Add-Log "本次任务将使用自动生成的模板副本：$psdPath"
     }
 
-    Set-RunProgress -Stage '建立任务输出目录' -Detail '正在创建本次任务的成品图、成品PSD、数据文件和报告目录。'
-    $taskOutputDir = Join-Path $outputRoot ("套版任务_{0}" -f (Get-Date).ToString('yyyyMMdd_HHmmss_fff'))
-    $jpgOutputDir = Join-Path $taskOutputDir '成品图'
-    $psdOutputDir = Join-Path $taskOutputDir '成品PSD'
-    New-Item -Path $taskOutputDir -ItemType Directory -Force | Out-Null
+    Set-RunProgress -Stage '建立任务文件夹' -Detail '正在创建本次任务的 JPG、PSD 和任务记录文件夹。'
+    $taskOutputDir = New-TaskOutputDirectory -OutputRoot $outputRoot -SheetName $sheetName
+    $jpgOutputDir = Join-Path $taskOutputDir 'JPG成品'
+    $psdOutputDir = Join-Path $taskOutputDir 'PSD源文件'
+    $taskRecordDir = Join-Path $taskOutputDir '任务记录'
     New-Item -Path $jpgOutputDir -ItemType Directory -Force | Out-Null
     New-Item -Path $psdOutputDir -ItemType Directory -Force | Out-Null
+    New-Item -Path $taskRecordDir -ItemType Directory -Force | Out-Null
     Assert-WritableDirectory -Path $taskOutputDir -Purpose '任务输出目录'
-    Assert-WritableDirectory -Path $jpgOutputDir -Purpose '成品图输出目录'
-    Assert-WritableDirectory -Path $psdOutputDir -Purpose '成品PSD输出目录'
-    $reportPath = Join-Path $taskOutputDir 'L0任务报告.txt'
+    Assert-WritableDirectory -Path $jpgOutputDir -Purpose 'JPG 成品输出目录'
+    Assert-WritableDirectory -Path $psdOutputDir -Purpose 'PSD 源文件输出目录'
+    Assert-WritableDirectory -Path $taskRecordDir -Purpose '任务记录目录'
+    $reportPath = Join-Path $taskRecordDir '任务日志.txt'
 
     Add-Log "Excel：$excelPath"
     Add-Log "PSD：$psdPath"
@@ -1697,7 +1741,22 @@ try {
     } else {
         Add-Log "本次任务：$selectedProduct"
     }
+    $script:CurrentProductName = $selectedProduct
     Save-UserSettings -ExcelPath $excelPath -PsdPath $psdPath -OutputRoot $outputRoot -SheetName $sheetName -ProductName $selectedProduct
+    $taskInfo = @(
+        '电商主图套版任务信息',
+        '',
+        "创建时间：$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss'))",
+        "商品表格：$excelPath",
+        "PSD 模板：$psdPath",
+        "数据工作表：$sheetName",
+        "商品范围：$(if ($selectedProduct) { $selectedProduct } else { '全部商品' })",
+        "JPG 成品：$jpgOutputDir",
+        "PSD 源文件：$psdOutputDir",
+        '',
+        '异常商品会自动跳过，具体原因请查看同目录的异常记录.csv。'
+    ) -join [Environment]::NewLine
+    Write-Utf8Bom -Path (Join-Path $taskRecordDir '任务信息.txt') -Content ($taskInfo + [Environment]::NewLine)
 
     # All interactive pickers have closed. Showing progress now cannot cover them.
     New-RunProgressWindow
@@ -1706,7 +1765,7 @@ try {
         $cleanScript,
         '--xlsx', $excelPath,
         '--sheet', $sheetName,
-        '--output-dir', $taskOutputDir
+        '--output-dir', $taskRecordDir
     )
     if (-not [string]::IsNullOrWhiteSpace($selectedProduct)) {
         foreach ($product in @($selectedProduct -split '\|' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
@@ -1729,9 +1788,9 @@ try {
         throw "数据清洗失败：$($cleanOutput -join '；')"
     }
 
-    $dataCsv = Join-Path $taskOutputDir 'data.csv'
-    $allDataCsv = Join-Path $taskOutputDir 'data_全部记录.csv'
-    $errorCsv = Join-Path $taskOutputDir '异常记录.csv'
+    $dataCsv = Join-Path $taskRecordDir 'data.csv'
+    $allDataCsv = Join-Path $taskRecordDir 'data_全部记录.csv'
+    $errorCsv = Join-Path $taskRecordDir '异常记录.csv'
     if (-not (Test-Path -LiteralPath $dataCsv)) { throw "未生成 data.csv：$dataCsv" }
     if (-not (Test-Path -LiteralPath $allDataCsv)) { throw "未生成 data_全部记录.csv：$allDataCsv" }
 
@@ -1743,7 +1802,7 @@ try {
         $detail = if ([string]::IsNullOrWhiteSpace([string]$_.异常详情)) { [string]$_.异常类型 } else { [string]$_.异常详情 }
         "$product：$detail"
     }) -join '；')
-    if ($dataRows.Count -eq 0 -and ($errorRows.Count -eq 0 -or $NoUi)) {
+    if ($dataRows.Count -eq 0) {
         $issueSummary = if ($errorRows.Count -gt 0) {
             (($errorRows | Group-Object -Property '异常类型' | Sort-Object Count -Descending | ForEach-Object {
                 "{0} {1} 条" -f $_.Name, $_.Count
@@ -1756,9 +1815,7 @@ try {
         Write-Utf8Bom -Path $reportPath -Content (($script:LogLines -join [Environment]::NewLine) + [Environment]::NewLine)
         Close-RunProgressWindow
         Write-EntryStatus -Status 'data_validation_failed' -Message $validationMessage
-        if (-not $NoUi) {
-            [System.Windows.Forms.MessageBox]::Show($validationMessage, '生成前检查未通过') | Out-Null
-        }
+        Write-TaskHistory -Status '数据未通过' -Message "没有可生成商品；请查看任务记录中的异常记录.csv。"
         exit 1
     }
     $issueSummary = if ($errorRows.Count -gt 0) {
@@ -1771,24 +1828,8 @@ try {
     Add-Log "数据校验完成：可处理记录 $($dataRows.Count) 条；异常 $($errorRows.Count) 条；异常类型：$issueSummary。异常清单：$errorCsv"
     $preflightMode = 'valid_only'
     if ($errorRows.Count -gt 0 -and -not $NoUi) {
-        # Do not start Photoshop until the designer has seen the exact flagged rows.
-        Close-RunProgressWindow
-        $preflightMode = Confirm-PreflightIssues -ErrorRows $errorRows -ValidCount $dataRows.Count -ErrorCsv $errorCsv
-        if ($preflightMode -eq 'cancel' -or [string]::IsNullOrWhiteSpace($preflightMode)) {
-            $cancelMessage = "已在开始前数据校验阶段取消。本次未启动 Photoshop；可处理 $($dataRows.Count) 条，需修正 $($errorRows.Count) 条。异常清单：$errorCsv"
-            Add-Log $cancelMessage
-            Write-Utf8Bom -Path $reportPath -Content (($script:LogLines -join [Environment]::NewLine) + [Environment]::NewLine)
-            Write-EntryStatus -Status 'needs_review' -Message $cancelMessage
-            exit 0
-        }
-        if ($preflightMode -eq 'all_rows') {
-            $dataCsv = $allDataCsv
-            $dataRows = $allDataRows
-            Add-Log "已由设计师确认按表格内容继续生成：将处理 $($dataRows.Count) 条记录，预检问题保留至结果报告。"
-        }
-        New-RunProgressWindow
-        $modeLabel = if ($preflightMode -eq 'all_rows') { '全部商品（含需核对记录）' } else { '无问题商品' }
-        Set-RunProgress -Stage '启动 Photoshop' -Detail "已确认开始前校验结果，正在处理 $($dataRows.Count) 条$modeLabel。"
+        Add-Log "已自动跳过 $($errorRows.Count) 条异常商品；详情仅写入任务记录，不弹出逐条错误。"
+        Set-RunProgress -Stage '启动 Photoshop' -Detail "正在处理 $($dataRows.Count) 条无问题商品；异常商品已记录并跳过。"
     }
     $priceSingleRows = @($dataRows | Where-Object {
         $_.PSObject.Properties.Name -contains '价格' -and
@@ -1828,6 +1869,9 @@ try {
 
     $resultReport = Join-Path $jpgOutputDir '结果报告.csv'
     $resultSummary = Get-PhotoshopResultSummary -ResultReport $resultReport -JpgOutputDir $jpgOutputDir
+    $storedResultReport = Join-Path $taskRecordDir '生成结果.csv'
+    Move-Item -LiteralPath $resultReport -Destination $storedResultReport -Force
+    $resultReport = $storedResultReport
     Close-OpenedPhotoshopDocument
 
     if ($errorRows.Count -gt 0 -and $preflightMode -ne 'all_rows') {
@@ -1857,8 +1901,9 @@ try {
             $reviewMessage += "`r`n失败明细：$($resultSummary.FailureDetails)"
         }
         Write-EntryStatus -Status 'needs_review' -Message $reviewMessage
+        Write-TaskHistory -Status '已完成，有跳过项' -Message "已导出 $($resultSummary.ExportedCount) 张；跳过或需核对 $($resultSummary.FailureCount) 条。"
         if (-not $NoUi) {
-            Show-TaskCompletionDialog -Title '套版处理完成，需复核' -Message $reviewMessage -JpgOutputDir $jpgOutputDir
+            Show-TaskCompletionDialog -Title '套版已完成' -Message "套版完成。`r`n已生成 $($resultSummary.ExportedCount) 张 JPG。`r`n有 $($resultSummary.FailureCount) 条未生成，详情已保存在任务记录中。`r`n$elapsedText" -JpgOutputDir $jpgOutputDir
         }
         exit 0
     }
@@ -1869,6 +1914,7 @@ try {
     Write-Utf8Bom -Path $reportPath -Content (($script:LogLines -join [Environment]::NewLine) + [Environment]::NewLine)
     Close-RunProgressWindow
     Write-EntryStatus -Status 'success' -Message "套版完成。$($resultSummary.SummaryText) $elapsedText"
+    Write-TaskHistory -Status '已完成' -Message "已导出 $($resultSummary.ExportedCount) 张 JPG。$elapsedText"
     if (-not $NoUi) {
             Show-TaskCompletionDialog -Title '套版已完成' -Message "套版完成。`r`n$($resultSummary.SummaryText)`r`n$elapsedText" -JpgOutputDir $jpgOutputDir
     }
@@ -1881,9 +1927,7 @@ try {
     if ($reportPath) {
         Write-Utf8Bom -Path $reportPath -Content (($script:LogLines -join [Environment]::NewLine) + [Environment]::NewLine)
     }
-    Write-EntryFailureReport -ErrorSummary $message -Suggestion '请把本包下 _diagnostics 文件夹整体发给开发同事；如果已建立任务输出目录，也一并提供该目录。'
-    if (-not $NoUi) {
-        try { [System.Windows.Forms.MessageBox]::Show("$message`r`n`r`n已写入本包 _diagnostics 文件夹：failure.txt / failure.csv / status.json。请把整个 _diagnostics 文件夹发给开发同事。", '电商主图批量套版 L0') | Out-Null } catch {}
-    }
+    Write-EntryFailureReport -ErrorSummary $message -Suggestion '错误已经写入工具任务记录；需要排查时，请提供任务文件夹中的任务记录，或用户目录下的工具任务记录。'
+    Write-TaskHistory -Status '失败' -Message $message
     exit 1
 }

@@ -5,7 +5,11 @@ title L0 internal runner
 
 set "INTERNAL_DIR=%~dp0"
 for %%I in ("%INTERNAL_DIR%..") do set "BASE=%%~fI\"
-set "DIAG=%BASE%_diagnostics"
+if defined LOCALAPPDATA (
+  set "DIAG=%LOCALAPPDATA%\电商主图套版工具\任务记录"
+) else (
+  set "DIAG=%BASE%_diagnostics"
+)
 set "LOG=%DIAG%\start.log"
 set "PS_SCRIPT=%INTERNAL_DIR%L0_Run.ps1"
 set "PS1_MARKER=%DIAG%\ps1_started.marker"
@@ -76,7 +80,6 @@ set "FAIL_REASON=%~3"
 set "FAIL_EXIT=%~4"
 if not defined FAIL_EXIT set "FAIL_EXIT=1"
 if not exist "%DIAG%" mkdir "%DIAG%" >nul 2>nul
-echo Startup failed: %FAIL_REASON_CN%
 if not exist "%STATUS_JSON%" call :WRITE_STATUS_JSON
 if not exist "%FAILURE_TXT%" (
   > "%FAILURE_TXT%" echo L0 startup failed
