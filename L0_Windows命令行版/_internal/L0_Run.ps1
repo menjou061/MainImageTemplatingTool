@@ -777,7 +777,7 @@ function Select-TaskSettings {
     $form.Add_Shown({ Move-FormIntoVisibleWorkingArea -Form $form })
 
     $title = New-Object System.Windows.Forms.Label
-    $title.Text = '选择商品表格和 PSD 模板，确认商品范围后即可开始。'
+    $title.Text = '请先启动并登录 Photoshop，进入首页后再选择商品表格和 PSD 模板。'
     $title.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 11, [System.Drawing.FontStyle]::Bold)
     $title.AutoSize = $true
     $title.Location = New-Object System.Drawing.Point(16, 16)
@@ -1082,6 +1082,13 @@ function Select-TaskSettings {
     })
 
     $runButton.Add_Click({
+        $photoshopCheck = Get-PhotoshopReadiness
+        if (-not $photoshopCheck.Ready) {
+            $statusLabel.Text = $photoshopCheck.Message
+            Add-Log "Photoshop 前置检查未通过：$($photoshopCheck.Code)；$($photoshopCheck.Detail)"
+            return
+        }
+        Add-Log "Photoshop 前置检查通过：版本 $($photoshopCheck.Version)。"
         $candidateExcel = $excelBox.Text.Trim()
         $candidatePsd = $psdBox.Text.Trim()
         $candidateOutput = $outputBox.Text.Trim()
@@ -1440,7 +1447,87 @@ function Get-PhotoshopComProgIds {
     return $progIds | Sort-Object -Unique -Descending
 }
 
+function Get-PhotoshopReadiness {
+    try {
+        $currentSessionId = (Get-Process -Id $PID -ErrorAction Stop).SessionId
+        $photoshopProcesses = @(
+            Get-Process -Name 'Photoshop' -ErrorAction SilentlyContinue |
+                Where-Object { $_.SessionId -eq $currentSessionId }
+        )
+    } catch {
+        $photoshopProcesses = @()
+    }
+
+    if ($photoshopProcesses.Count -eq 0) {
+        return [pscustomobject]@{
+            Ready = $false
+            Code = 'PS_NOT_RUNNING'
+            Version = ''
+            Message = '请先启动并登录 Photoshop，进入首页后再点击“开始生成”。'
+            Detail = '当前 Windows 会话中未检测到 Photoshop 进程。'
+        }
+    }
+
+    $photoshopProcess = $photoshopProcesses | Sort-Object StartTime -Descending | Select-Object -First 1
+    if (-not $photoshopProcess.Responding) {
+        return [pscustomobject]@{
+            Ready = $false
+            Code = 'PS_NOT_RESPONDING'
+            Version = ''
+            Message = 'Photoshop 当前无响应。请先关闭并重新启动 Photoshop，进入首页后再试。'
+            Detail = "Photoshop 进程无响应；进程 ID $($photoshopProcess.Id)。"
+        }
+    }
+    if ([int64]$photoshopProcess.MainWindowHandle -eq 0) {
+        return [pscustomobject]@{
+            Ready = $false
+            Code = 'PS_NOT_READY'
+            Version = ''
+            Message = 'Photoshop 正在启动或尚未显示首页。请处理登录、授权或弹窗，进入首页后再试。'
+            Detail = "Photoshop 进程存在但没有主窗口；进程 ID $($photoshopProcess.Id)。"
+        }
+    }
+
+    $version = ''
+    try {
+        $photoshopPath = [string]$photoshopProcess.Path
+        if ([string]::IsNullOrWhiteSpace($photoshopPath)) {
+            $photoshopPath = [string]$photoshopProcess.MainModule.FileName
+        }
+        if (-not [string]::IsNullOrWhiteSpace($photoshopPath)) {
+            $fileVersionInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($photoshopPath)
+            $version = [string]$fileVersionInfo.ProductVersion
+            if ([string]::IsNullOrWhiteSpace($version)) {
+                $version = [string]$fileVersionInfo.FileVersion
+            }
+        }
+    } catch {
+        $version = ''
+    }
+    if ([string]::IsNullOrWhiteSpace($version)) {
+        return [pscustomobject]@{
+            Ready = $false
+            Code = 'PS_VERSION_UNAVAILABLE'
+            Version = ''
+            Message = '无法读取 Photoshop 版本。请确认使用 Windows 正式安装版，并尝试重启或修复 Photoshop。'
+            Detail = "Photoshop 进程存在但无法读取安装版本；进程 ID $($photoshopProcess.Id)。"
+        }
+    }
+
+    return [pscustomobject]@{
+        Ready = $true
+        Code = 'PS_READY'
+        Version = $version
+        Message = "Photoshop $version 已就绪。"
+        Detail = "进程 ID $($photoshopProcess.Id)；主窗口句柄 $($photoshopProcess.MainWindowHandle)。"
+    }
+}
+
 function Start-Photoshop {
+    $readiness = Get-PhotoshopReadiness
+    if (-not $readiness.Ready) {
+        throw "$($readiness.Message) 错误码：$($readiness.Code)。"
+    }
     foreach ($progId in Get-PhotoshopComProgIds) {
         try {
             $application = New-Object -ComObject $progId -ErrorAction Stop
@@ -1451,7 +1538,7 @@ function Start-Photoshop {
             Add-Log "Photoshop COM 启动失败：$progId；$($_.Exception.Message)"
         }
     }
-    throw 'Photoshop COM 启动失败。请确认 Windows 已安装并能手动打开 Photoshop。'
+    throw "Photoshop 自动化接口不可用（检测到版本 $($readiness.Version)）。可能是安装注册异常或当前版本不兼容；请重启或修复 Photoshop 后重试。"
 }
 
 function Invoke-PhotoshopJavaScript {

@@ -3,7 +3,8 @@
     [Parameter(Mandatory = $true)][string]$ExcelPath,
     [Parameter(Mandatory = $true)][string]$PsdPath,
     [Parameter(Mandatory = $true)][string]$OutputRoot,
-    [Parameter(Mandatory = $true)][string]$ArtifactDir
+    [Parameter(Mandatory = $true)][string]$ArtifactDir,
+    [switch]$UseSingleProduct
 )
 
 $ErrorActionPreference = 'Stop'
@@ -176,6 +177,8 @@ try {
 
     $mainWindow = Wait-DesktopWindow -Title '电商主图套版工具 1.0' -TimeoutSeconds 45
     Show-AutomationWindow -Window $mainWindow
+    $photoshopHint = Get-Control -Root $mainWindow -Name '请先启动并登录 Photoshop，进入首页后再选择商品表格和 PSD 模板。' -ControlType ([System.Windows.Automation.ControlType]::Text)
+    if (-not $photoshopHint) { throw '初始页缺少 Photoshop 启动提醒。' }
     Write-ControlSnapshot -Window $mainWindow -Label '初始页'
     Capture-Desktop -Name '01-初始页.png'
 
@@ -209,11 +212,13 @@ try {
     Start-Sleep -Seconds 1
     Capture-Desktop -Name '03-商品已勾选.png'
 
-    # Use the all-products path for the Photoshop export portion of this smoke
-    # test. The checked-item state is visually verified in the prior screenshot.
-    $allRadio = Get-Control -Root $mainWindow -Name '全部商品' -ControlType ([System.Windows.Automation.ControlType]::RadioButton)
-    Click-Control -Control $allRadio
-    Start-Sleep -Milliseconds 500
+    if (-not $UseSingleProduct) {
+        # The checked-item state is visually verified before switching back to
+        # the full-sheet path used by the default regression.
+        $allRadio = Get-Control -Root $mainWindow -Name '全部商品' -ControlType ([System.Windows.Automation.ControlType]::RadioButton)
+        Click-Control -Control $allRadio
+        Start-Sleep -Milliseconds 500
+    }
 
     Invoke-Control -Control (Get-Control -Root $mainWindow -Name '开始生成' -ControlType ([System.Windows.Automation.ControlType]::Button))
     Write-SmokeLog '已点击开始生成。'
