@@ -84,7 +84,14 @@ function Show-AutomationWindow {
     param([System.Windows.Automation.AutomationElement]$Window)
     if (-not $Window) { return }
     $handle = [IntPtr]$Window.Current.NativeWindowHandle
-    [void][NativeMouse]::ShowWindow($handle, 9)
+    try {
+        $windowPattern = $Window.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)
+        if ($windowPattern.Current.WindowVisualState -eq [System.Windows.Automation.WindowVisualState]::Minimized) {
+            $windowPattern.SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Normal)
+        }
+    } catch {
+        [void][NativeMouse]::ShowWindow($handle, 9)
+    }
     [void][NativeMouse]::SetForegroundWindow($handle)
     Start-Sleep -Milliseconds 250
 }
@@ -134,6 +141,17 @@ function Capture-Desktop {
     }
 }
 
+function Format-BoundsValue {
+    param([double]$Value)
+    if ([double]::IsNaN($Value) -or [double]::IsInfinity($Value)) {
+        return 'offscreen'
+    }
+    if ($Value -gt [int]::MaxValue -or $Value -lt [int]::MinValue) {
+        return 'offscreen'
+    }
+    return [string][Math]::Round($Value)
+}
+
 function Write-ControlSnapshot {
     param(
         [System.Windows.Automation.AutomationElement]$Window,
@@ -146,7 +164,7 @@ function Write-ControlSnapshot {
     )
     foreach ($control in $controls) {
         $rectangle = $control.Current.BoundingRectangle
-        Write-SmokeLog ("{0} | {1} | x={2} y={3} w={4} h={5}" -f $control.Current.ControlType.ProgrammaticName, $control.Current.Name, [int]$rectangle.X, [int]$rectangle.Y, [int]$rectangle.Width, [int]$rectangle.Height)
+        Write-SmokeLog ("{0} | {1} | x={2} y={3} w={4} h={5}" -f $control.Current.ControlType.ProgrammaticName, $control.Current.Name, (Format-BoundsValue $rectangle.X), (Format-BoundsValue $rectangle.Y), (Format-BoundsValue $rectangle.Width), (Format-BoundsValue $rectangle.Height))
     }
 }
 

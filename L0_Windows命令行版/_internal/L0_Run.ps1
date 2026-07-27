@@ -741,6 +741,21 @@ function Select-ProductTask {
     return $null
 }
 
+function Move-FormIntoVisibleWorkingArea {
+    param([object]$Form)
+    if (-not $Form) { return }
+
+    $workingArea = [System.Windows.Forms.Screen]::FromControl($Form).WorkingArea
+    $maxLeft = [Math]::Max($workingArea.Left, $workingArea.Right - $Form.Width)
+    $maxTop = [Math]::Max($workingArea.Top, $workingArea.Bottom - $Form.Height)
+    $left = [Math]::Min([Math]::Max($Form.Left, $workingArea.Left), $maxLeft)
+    $top = [Math]::Min([Math]::Max($Form.Top, $workingArea.Top), $maxTop)
+
+    if ($left -ne $Form.Left -or $top -ne $Form.Top) {
+        $Form.Location = New-Object System.Drawing.Point($left, $top)
+    }
+}
+
 function Select-TaskSettings {
     param(
         [object]$Python,
@@ -759,6 +774,7 @@ function Select-TaskSettings {
     $form.MinimizeBox = $false
     $form.MaximizeBox = $false
     $form.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
+    $form.Add_Shown({ Move-FormIntoVisibleWorkingArea -Form $form })
 
     $title = New-Object System.Windows.Forms.Label
     $title.Text = '选择商品表格和 PSD 模板，确认商品范围后即可开始。'
