@@ -1034,7 +1034,7 @@ function Select-TaskSettings {
     })
 
     $excelBrowse.Add_Click({
-        $selected = Select-File -Title '请选择 Excel 变量表（xlsx）' -Filter 'Excel 文件 (*.xlsx)|*.xlsx'
+        $selected = Select-File -Title '请选择 Excel 变量表（xlsx / xltx）' -Filter 'Excel 文件 (*.xlsx;*.xltx)|*.xlsx;*.xltx'
         if ($selected) {
             $excelBox.Text = $selected
             [void](& $loadSheets '' '')

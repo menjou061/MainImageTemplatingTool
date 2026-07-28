@@ -106,10 +106,32 @@ function findProductCandidates(document) {
     return candidates;
 }
 
+function hasLegacyChannelDesignSignals(document) {
+    // Some channel teams deliver a finished design composition whose layers
+    // are named by visual section (产品/时间/价格), not by the fields that the
+    // batch engine can safely replace.  Treat it as an explicit mapping task
+    // instead of guessing which of several text layers should receive data.
+    var signals = ["产品", "时间", "价格"];
+    var matches = 0;
+    for (var index = 0; index < signals.length; index++) {
+        if (findNamedLayers(document, signals[index]).length > 0) {
+            matches++;
+        }
+    }
+    return matches >= 2;
+}
+
 function inspectPreparation(document) {
     var existing = templateProblems(document);
     if (existing.length === 0) {
         return { status: "READY", message: "模板已符合 @文本、!智能对象命名规范。" };
+    }
+
+    if (hasLegacyChannelDesignSignals(document)) {
+        return {
+            status: "AMBIGUOUS",
+            message: "检测到渠道设计稿图层（产品/时间/价格），但未按工具字段命名。请模板制作人员先将动态文字改为 @字段、商品图改为 !商品图智能对象后再运行。"
+        };
     }
 
     var candidates = findProductCandidates(document);

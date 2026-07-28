@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Convert a horizontal e-commerce Excel matrix into UTF-8 CSV rows.
+"""Convert supported e-commerce Excel layouts into UTF-8 CSV rows.
 
-No mapping file is used. The first-column variable names in the selected
-worksheet become CSV columns; the small set of standard name normalisations
-below mirrors the approved PSD naming convention.
+Both the original horizontal matrix and the common channel export with one
+product per row are accepted.  The latter is normalized through the built-in
+``变量01``...``变量09`` channel profile so a designer does not need to
+transpose or rebuild a workbook by hand.
 """
 
 from __future__ import annotations
@@ -32,6 +33,26 @@ NAME_MAP = {
     "DT17090-24旧": "旧包装图",
     "正式618新旧包装底": "新旧包装底图",
 }
+# A number of channel workbooks use positional variables instead of business
+# names.  This is intentionally a narrow, documented profile: it mirrors the
+# supplied ``干巾`` workbook and avoids guessing when a future channel changes
+# the meaning or order of its variables.
+VERTICAL_NAME_MAP = {
+    "图片目录路径": "商品图",
+    "图片路径": "商品图",
+    "图片文件路径": "商品图",
+    "商品图片": "商品图",
+    "变量01": "折扣",
+    "变量02": "券名",
+    "变量03": "到手",
+    "变量04": "价格1",
+    "变量05": "价格2",
+    "变量06": "规格",
+    "变量07": "卖点",
+    "变量08": "商品图片文件名",
+    "变量09": "商品图片目录",
+}
+VERTICAL_REQUIRED_RECORD_FIELDS = {"到手", "卖点", "规格"}
 REQUIRED_IMAGE_FIELDS = {"商品图"}
 REQUIRED_RECORD_FIELDS = {"活动时间", "到手", "卖点", "规格"}
 STANDARD_COLUMNS = [
@@ -76,9 +97,28 @@ def is_display_image_formula(value: Any) -> bool:
     return normalized.startswith("=") and "dispimg" in normalized
 
 
+def looks_like_vertical_header(value: Any) -> bool:
+    text = as_text(value)
+    return text in {"变量名称", "图片目录路径", "图片路径", "图片文件路径", "商品图", "商品图片"} or text.startswith("变量")
+
+
+def is_vertical_layout(ws) -> bool:
+    row_score = sum(
+        1
+        for column in range(1, ws.max_column + 1)
+        if looks_like_vertical_header(ws.cell(1, column).value)
+    )
+    return row_score >= 2 and ws.max_row >= 2 and ws.max_column >= 2
+
+
 def field_name(value: Any) -> str:
     raw = as_text(value)
     return NAME_MAP.get(raw, raw)
+
+
+def vertical_field_name(value: Any) -> str:
+    raw = as_text(value)
+    return VERTICAL_NAME_MAP.get(raw, field_name(raw))
 
 
 def image_basename(value: str) -> str:
@@ -93,6 +133,35 @@ def normalize_image_reference(value: str) -> str:
     locate one file, and makes the preflight result deterministic.
     """
     return value
+
+
+def evaluate_concat_formula(formula: Any, ws_values, row: int, column: int) -> str:
+    """Resolve the simple ``=K2&"\\"&J2`` formulas used by channel sheets.
+
+    Excel normally stores a cached result and ``data_only=True`` supplies it.
+    This fallback covers files saved without a cache, without attempting to
+    become a general Excel formula engine.
+    """
+    if not isinstance(formula, str) or not formula.lstrip().startswith("="):
+        return as_text(formula)
+    cached = ws_values.cell(row, column).value if ws_values is not None else None
+    if cached is not None and not (isinstance(cached, str) and cached.startswith("=")):
+        return as_text(cached)
+    expression = formula.strip()[1:]
+    pieces: list[str] = []
+    for token in expression.split("&"):
+        token = token.strip()
+        if len(token) >= 2 and token[0] == '"' and token[-1] == '"':
+            pieces.append(token[1:-1].replace('""', '"'))
+            continue
+        if re.fullmatch(r"[A-Za-z]{1,3}[0-9]+", token):
+            from openpyxl.utils.cell import coordinate_to_tuple
+
+            ref_row, ref_column = coordinate_to_tuple(token.upper())
+            pieces.append(as_text(ws_values.cell(ref_row, ref_column).value if ws_values is not None else ""))
+            continue
+        return as_text(cached if cached is not None else formula)
+    return "".join(pieces)
 
 
 def is_absolute_material_path(value: str) -> bool:
@@ -151,7 +220,7 @@ def choose_inputs(args: argparse.Namespace) -> tuple[Path, str, Path]:
 
             root = Tk()
             root.withdraw()
-            picked = filedialog.askopenfilename(title="选择 Excel 变量表", filetypes=[("Excel", "*.xlsx")])
+            picked = filedialog.askopenfilename(title="选择 Excel 变量表", filetypes=[("Excel", "*.xlsx *.xltx")])
             root.destroy()
             workbook_path = Path(picked) if picked else None
         except Exception:
@@ -177,8 +246,17 @@ def choose_inputs(args: argparse.Namespace) -> tuple[Path, str, Path]:
     return workbook_path, sheet, output_dir
 
 
-def source_variables(ws) -> list[tuple[int, str]]:
+def source_variables(ws, layout: str = "horizontal") -> list[tuple[int, str]]:
     variables: list[tuple[int, str]] = []
+    if layout == "vertical":
+        for column in range(2, ws.max_column + 1):
+            raw = ws.cell(1, column).value
+            if is_blank(raw) or is_display_image_formula(raw):
+                continue
+            name = vertical_field_name(raw)
+            validate_variable_name(name)
+            variables.append((column, name))
+        return variables
     for row in range(2, ws.max_row + 1):
         raw = ws.cell(row, 1).value
         if is_blank(raw) or is_display_image_formula(raw):
@@ -193,10 +271,12 @@ def source_variables(ws) -> list[tuple[int, str]]:
     return variables
 
 
-def row_from_column(ws, column: int, variables: list[tuple[int, str]]) -> dict[str, str]:
+def row_from_column(ws, column: int, variables: list[tuple[int, str]], ws_values=None) -> dict[str, str]:
     row: dict[str, str] = {}
     for source_row, target_name in variables:
         value = ws.cell(source_row, column).value
+        if isinstance(value, str) and value.lstrip().startswith("="):
+            value = evaluate_concat_formula(value, ws_values, source_row, column)
         # Optional PSD variables may legitimately contain line breaks. The
         # fixed main-image contract remains strict.
         if has_newline(value) and (target_name in REQUIRED_RECORD_FIELDS or target_name in REQUIRED_IMAGE_FIELDS):
@@ -218,6 +298,52 @@ def row_from_column(ws, column: int, variables: list[tuple[int, str]]) -> dict[s
         if not all(filled):
             row["预检异常"] = append_issue(row.get("预检异常", ""), "字段为空")
 
+    return row
+
+
+def row_from_vertical(
+    ws,
+    ws_values,
+    source_row: int,
+    variables: list[tuple[int, str]],
+) -> dict[str, str]:
+    row: dict[str, str] = {}
+    for source_column, target_name in variables:
+        formula_value = ws.cell(source_row, source_column).value
+        value = formula_value
+        if isinstance(formula_value, str) and formula_value.lstrip().startswith("="):
+            value = evaluate_concat_formula(formula_value, ws_values, source_row, source_column)
+        if has_newline(value) and (target_name in REQUIRED_RECORD_FIELDS or target_name in REQUIRED_IMAGE_FIELDS):
+            row["预检异常"] = append_issue(row.get("预检异常", ""), "脏数据")
+        text = normalize_price_part(value, target_name)
+        row[target_name] = normalize_image_reference(text)
+
+    # Some channel exports split the image path into directory + filename.
+    # Prefer the explicit full path column when present, then compose it from
+    # the two parts used by the supplied 现货-800 sheet.
+    if is_blank(row.get("商品图", "")):
+        directory = as_text(row.get("商品图片目录", ""))
+        filename = as_text(row.get("商品图片文件名", ""))
+        if directory and filename:
+            row["商品图"] = directory.rstrip("\\/") + "\\" + filename.lstrip("\\/")
+
+    if "价格" in row and is_blank(row.get("价格1")) and is_blank(row.get("价格2")):
+        row["价格1"], row["价格2"] = split_price(row["价格"])
+    elif is_blank(row.get("价格2")) and re.fullmatch(r"\d+\.\d+", row.get("价格1", "")):
+        row["价格1"], row["价格2"] = split_price(row["价格1"])
+
+    coupon_fields = [row.get("折扣", ""), row.get("券名", ""), row.get("券门槛", "")]
+    filled = [not is_blank(value) for value in coupon_fields]
+    if not any(filled):
+        row["优惠券开关"] = "否"
+    elif all(filled):
+        row["优惠券开关"] = "是"
+    else:
+        # In the positional channel profile 变量01/02 are promotional copy,
+        # not a three-part coupon contract. Keep the copy available for
+        # matching text layers, but do not mark the row invalid because this
+        # channel intentionally has no 券门槛 column.
+        row["优惠券开关"] = "否"
     return row
 
 
@@ -244,8 +370,9 @@ def add_material_precheck(record: dict[str, str]) -> None:
             record["预检异常"] = append_issue(record.get("预检异常", ""), f"缺图:{field}")
 
 
-def add_required_field_precheck(record: dict[str, str]) -> None:
-    missing = [field for field in REQUIRED_RECORD_FIELDS if is_blank(record.get(field, ""))]
+def add_required_field_precheck(record: dict[str, str], required_fields: set[str] | None = None) -> None:
+    required = required_fields if required_fields is not None else REQUIRED_RECORD_FIELDS
+    missing = [field for field in required if is_blank(record.get(field, ""))]
     if missing:
         record["预检异常"] = append_issue(record.get("预检异常", ""), "字段为空:" + "、".join(sorted(missing)))
 
@@ -280,39 +407,47 @@ def build_data(
     limit: int | None = None,
 ) -> tuple[int, int, Path, Path, Path]:
     workbook = load_workbook(workbook_path, read_only=False, data_only=False)
+    values_workbook = load_workbook(workbook_path, read_only=False, data_only=True)
     ws = workbook[sheet_name]
+    ws_values = values_workbook[sheet_name]
     if ws.sheet_state != "visible" or ws.title == "WpsReserved_CellImgList":
         raise ValueError("不能处理隐藏 Sheet 或 WPS 内嵌图片索引 Sheet。")
-    variables = source_variables(ws)
+    layout = "vertical" if is_vertical_layout(ws) else "horizontal"
+    variables = source_variables(ws, layout)
+    required_fields = REQUIRED_RECORD_FIELDS if layout == "horizontal" else VERTICAL_REQUIRED_RECORD_FIELDS
     # Keep every selected product candidate, including records with preflight
     # issues.  The UI can later let the designer choose either the clean set or
     # the original-content set without reconstructing rows from an exception
     # report (which would lose fields and their original values).
     candidates: list[tuple[int, str, dict[str, str]]] = []
     exceptions: list[dict[str, str]] = []
-    for column in range(2, ws.max_column + 1):
-        header = ws.cell(1, column).value
-        if is_blank(header) or is_display_image_formula(header):
+    if layout == "vertical":
+        source_items = ((row, as_text(ws_values.cell(row, 1).value)) for row in range(2, ws.max_row + 1))
+    else:
+        source_items = ((column, as_text(ws_values.cell(1, column).value)) for column in range(2, ws.max_column + 1))
+    for source_index, product in source_items:
+        raw_product = ws.cell(source_index, 1).value if layout == "vertical" else ws.cell(1, source_index).value
+        if is_blank(product) or is_display_image_formula(raw_product):
             continue
-        product = as_text(header)
         if product_filter and product not in product_filter:
             continue
-        if has_newline(header):
-            record = row_from_column(ws, column, variables)
-            record["预检异常"] = append_issue(record.get("预检异常", ""), "脏数据")
-            exceptions.append(exception_record(record, product, column, "脏数据", "商品文件名包含换行符"))
+        if layout == "vertical":
+            record = row_from_vertical(ws, ws_values, source_index, variables)
         else:
-            record = row_from_column(ws, column, variables)
+            record = row_from_column(ws, source_index, variables, ws_values)
+        record["商品文件名"] = product
+        if has_newline(raw_product):
+            record["预检异常"] = append_issue(record.get("预检异常", ""), "脏数据")
+            exceptions.append(exception_record(record, product, source_index, "脏数据", "商品文件名包含换行符"))
         add_filename_precheck(record)
         add_material_precheck(record)
-        add_required_field_precheck(record)
-        if "脏数据" in record.get("预检异常", ""):
-            if not has_newline(header):
-                exceptions.append(exception_record(record, product, column, "脏数据", "任一单元格包含换行符"))
+        add_required_field_precheck(record, required_fields)
+        if "脏数据" in record.get("预检异常", "") and not has_newline(raw_product):
+            exceptions.append(exception_record(record, product, source_index, "脏数据", "任一单元格包含换行符"))
         price_error = price_format_error(record)
         if price_error:
             record["预检异常"] = append_issue(record.get("预检异常", ""), "价格格式异常")
-            exceptions.append(exception_record(record, product, column, "价格格式异常", price_error))
+            exceptions.append(exception_record(record, product, source_index, "价格格式异常", price_error))
         precheck = record.get("预检异常", "")
         if precheck and not ("脏数据" in precheck or price_error):
             issue_type = "数据预检不通过"
@@ -324,8 +459,8 @@ def build_data(
                 issue_type = "字段为空"
             elif "文件名特殊字符:" in precheck:
                 issue_type = "文件名特殊字符"
-            exceptions.append(exception_record(record, product, column, issue_type, precheck))
-        candidates.append((column, product, record))
+            exceptions.append(exception_record(record, product, source_index, issue_type, precheck))
+        candidates.append((source_index, product, record))
 
     by_product: dict[str, list[tuple[int, str, dict[str, str]]]] = defaultdict(list)
     for candidate in candidates:
