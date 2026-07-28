@@ -28,7 +28,14 @@ def get_profile(profile_id: str | None, variant: str | None = None, *, require_e
         raise ProfileError("E_PROFILE_UNSUPPORTED", f"profile {selected_id} 不支持 variant：{selected_variant}")
     result = dict(profile)
     result["variant"] = selected_variant
-    result["target_size"] = profile["variants"][selected_variant]
+    selected_variant_config = profile["variants"][selected_variant]
+    result["target_size"] = {
+        "width": selected_variant_config["width"],
+        "height": selected_variant_config["height"],
+    }
+    for key in ("export_size", "sheet_name", "template_bindings"):
+        if key in selected_variant_config:
+            result[key] = selected_variant_config[key]
     return result
 
 def validate_vertical_schema(headers: list[str], profile: dict[str, Any]) -> None:

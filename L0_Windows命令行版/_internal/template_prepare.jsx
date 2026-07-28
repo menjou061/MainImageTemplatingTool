@@ -171,6 +171,48 @@ function hasLegacyChannelDesignSignals(document) {
     return matches >= 2;
 }
 
+function profileRequiredVariable(name) {
+    if (!CHANNEL_PROFILE || !CHANNEL_PROFILE.required_psd_variables) { return null; }
+    for (var index = 0; index < CHANNEL_PROFILE.required_psd_variables.length; index++) {
+        if (CHANNEL_PROFILE.required_psd_variables[index].name === name) {
+            return CHANNEL_PROFILE.required_psd_variables[index];
+        }
+    }
+    return null;
+}
+
+function profileBindingsAreUsable(document) {
+    if (!CHANNEL_PROFILE || !CHANNEL_PROFILE.template_bindings) { return false; }
+    for (var target in CHANNEL_PROFILE.template_bindings) {
+        if (!CHANNEL_PROFILE.template_bindings.hasOwnProperty(target)) { continue; }
+        var sourceLayers = findNamedLayers(document, CHANNEL_PROFILE.template_bindings[target]);
+        var required = profileRequiredVariable(target);
+        if (!required || sourceLayers.length !== 1) { return false; }
+        if (required.type === "text" && !isTextLayer(sourceLayers[0])) { return false; }
+        if (required.type === "smart_object" && sourceLayers[0].typename !== "ArtLayer") { return false; }
+    }
+    return true;
+}
+
+function applyProfileBindings(document) {
+    if (!CHANNEL_PROFILE || !CHANNEL_PROFILE.template_bindings) { return; }
+    for (var target in CHANNEL_PROFILE.template_bindings) {
+        if (!CHANNEL_PROFILE.template_bindings.hasOwnProperty(target)) { continue; }
+        var sourceLayers = findNamedLayers(document, CHANNEL_PROFILE.template_bindings[target]);
+        var required = profileRequiredVariable(target);
+        if (!required || sourceLayers.length !== 1) {
+            throw new Error("模板图层映射失效：" + target);
+        }
+        var layer = sourceLayers[0];
+        if (required.type === "text") {
+            if (!isTextLayer(layer)) { throw new Error("映射图层不是文本层：" + target); }
+            layer.name = "@" + target;
+        } else {
+            convertToSmartObject(document, layer, target);
+        }
+    }
+}
+
 function inspectPreparation(document) {
     var existing = templateProblems(document);
     if (existing.length === 0) {
@@ -179,6 +221,10 @@ function inspectPreparation(document) {
 
     if (usesPhotoshopVariables()) {
         return { status: "AMBIGUOUS", message: "PSD Variables 体检未通过：" + existing.join("；") + "。请模板制作人员恢复变量绑定后重试。" };
+    }
+
+    if (profileBindingsAreUsable(document)) {
+        return { status: "NEEDS_PREP", message: "已识别当前渠道模板图层映射，将生成套版模板副本。" };
     }
 
     if (hasLegacyChannelDesignSignals(document)) {
@@ -211,7 +257,7 @@ function inspectPreparation(document) {
     return { status: "NEEDS_PREP", message: existing.join("；") };
 }
 
-function convertToSmartObject(document, layer) {
+function convertToSmartObject(document, layer, targetName) {
     document.activeLayer = layer;
     if (!isSmartObject(layer)) {
         executeAction(stringIDToTypeID("newPlacedLayer"), undefined, DialogModes.NO);
@@ -219,7 +265,7 @@ function convertToSmartObject(document, layer) {
     if (!isSmartObject(document.activeLayer)) {
         throw new Error("商品图层转换智能对象失败");
     }
-    document.activeLayer.name = "!商品图";
+    document.activeLayer.name = "!" + (targetName || "商品图");
 }
 
 function prepareTemplate(document) {
@@ -232,6 +278,16 @@ function prepareTemplate(document) {
     }
 
     var all = [];
+    addAllLayers(document, all);
+    applyProfileBindings(document);
+    if (CHANNEL_PROFILE && CHANNEL_PROFILE.template_bindings) {
+        var profileProblems = templateProblems(document);
+        if (profileProblems.length > 0) {
+            throw new Error("自动改造后仍不完整：" + profileProblems.join("；"));
+        }
+        return { status: "PREPARED", message: "已按当前渠道映射完成图层命名和商品智能对象转换。" };
+    }
+    all = [];
     addAllLayers(document, all);
     for (var index = 0; index < all.length; index++) {
         var layer = all[index];

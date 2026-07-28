@@ -391,7 +391,11 @@ def build_data(
         }
     else:
         required_fields = REQUIRED_RECORD_FIELDS if layout == "horizontal" else {"预估到手价", "卖点", "规格"}
-        required_image_fields = REQUIRED_IMAGE_FIELDS
+        required_image_fields = {
+            variable["name"]
+            for variable in profile.get("required_psd_variables", [])
+            if variable.get("type") == "smart_object"
+        } or REQUIRED_IMAGE_FIELDS
     # Keep every selected product candidate, including records with preflight
     # issues.  The UI can later let the designer choose either the clean set or
     # the original-content set without reconstructing rows from an exception

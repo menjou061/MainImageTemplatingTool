@@ -1,6 +1,7 @@
 ﻿param(
     [string]$ExcelPath,
     [string]$PsdPath,
+    [string]$Psd750Path,
     [string]$OutputRoot,
     [string]$SheetName,
     [string]$ProductName,
@@ -370,6 +371,7 @@ function Save-UserSettings {
     param(
         [string]$ExcelPath,
         [string]$PsdPath,
+        [string]$Psd750Path,
         [string]$OutputRoot,
         [string]$SheetName,
         [string]$ProductName
@@ -377,6 +379,7 @@ function Save-UserSettings {
     $payload = [pscustomobject]@{
         excelPath = $ExcelPath
         psdPath = $PsdPath
+        psd750Path = if ([string]::IsNullOrWhiteSpace($Psd750Path)) { Get-SettingText -Settings $script:Settings -Name 'psd750Path' } else { $Psd750Path }
         outputRoot = $OutputRoot
         sheetName = $SheetName
         productName = $ProductName
@@ -765,16 +768,18 @@ function Select-TaskSettings {
         [object]$Python,
         [string]$InitialExcelPath,
         [string]$InitialPsdPath,
+        [string]$InitialPsd750Path,
         [string]$InitialOutputRoot,
         [string]$InitialSheetName,
-        [string]$InitialProductName
+        [string]$InitialProductName,
+        [bool]$IsBatchChannelTask
     )
 
     $form = New-Object System.Windows.Forms.Form
     $form.Text = '电商主图套版工具 1.1'
     $form.StartPosition = 'CenterScreen'
-    $form.Size = New-Object System.Drawing.Size(860, 610)
-    $form.MinimumSize = New-Object System.Drawing.Size(860, 610)
+    $form.Size = New-Object System.Drawing.Size(860, 650)
+    $form.MinimumSize = New-Object System.Drawing.Size(860, 650)
     $form.MinimizeBox = $false
     $form.MaximizeBox = $false
     $form.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
@@ -806,7 +811,7 @@ function Select-TaskSettings {
     $form.Controls.Add($excelBrowse)
 
     $psdLabel = New-Object System.Windows.Forms.Label
-    $psdLabel.Text = '2  PSD 模板'
+    $psdLabel.Text = if ($IsBatchChannelTask) { '2  800 PSD 模板' } else { '2  PSD 模板' }
     $psdLabel.AutoSize = $true
     $psdLabel.Location = New-Object System.Drawing.Point(16, 93)
     $form.Controls.Add($psdLabel)
@@ -823,27 +828,48 @@ function Select-TaskSettings {
     $psdBrowse.Size = New-Object System.Drawing.Size(88, 28)
     $form.Controls.Add($psdBrowse)
 
+    $psd750Label = New-Object System.Windows.Forms.Label
+    $psd750Label.Text = '3  750 PSD 模板'
+    $psd750Label.AutoSize = $true
+    $psd750Label.Location = New-Object System.Drawing.Point(16, 131)
+    $psd750Label.Visible = $IsBatchChannelTask
+    $form.Controls.Add($psd750Label)
+
+    $psd750Box = New-Object System.Windows.Forms.TextBox
+    $psd750Box.Location = New-Object System.Drawing.Point(125, 128)
+    $psd750Box.Size = New-Object System.Drawing.Size(585, 24)
+    $psd750Box.Text = $InitialPsd750Path
+    $psd750Box.Visible = $IsBatchChannelTask
+    $form.Controls.Add($psd750Box)
+
+    $psd750Browse = New-Object System.Windows.Forms.Button
+    $psd750Browse.Text = '浏览...'
+    $psd750Browse.Location = New-Object System.Drawing.Point(725, 126)
+    $psd750Browse.Size = New-Object System.Drawing.Size(88, 28)
+    $psd750Browse.Visible = $IsBatchChannelTask
+    $form.Controls.Add($psd750Browse)
+
     $outputLabel = New-Object System.Windows.Forms.Label
     $outputLabel.Text = '成品保存到'
     $outputLabel.AutoSize = $true
-    $outputLabel.Location = New-Object System.Drawing.Point(16, 131)
+    $outputLabel.Location = New-Object System.Drawing.Point(16, (if ($IsBatchChannelTask) { 169 } else { 131 }))
     $form.Controls.Add($outputLabel)
 
     $outputBox = New-Object System.Windows.Forms.TextBox
-    $outputBox.Location = New-Object System.Drawing.Point(125, 128)
+    $outputBox.Location = New-Object System.Drawing.Point(125, (if ($IsBatchChannelTask) { 166 } else { 128 }))
     $outputBox.Size = New-Object System.Drawing.Size(480, 24)
     $outputBox.Text = $InitialOutputRoot
     $form.Controls.Add($outputBox)
 
     $outputBrowse = New-Object System.Windows.Forms.Button
     $outputBrowse.Text = '更改...'
-    $outputBrowse.Location = New-Object System.Drawing.Point(620, 126)
+    $outputBrowse.Location = New-Object System.Drawing.Point(620, (if ($IsBatchChannelTask) { 164 } else { 126 }))
     $outputBrowse.Size = New-Object System.Drawing.Size(88, 28)
     $form.Controls.Add($outputBrowse)
 
     $openOutputButton = New-Object System.Windows.Forms.Button
     $openOutputButton.Text = '打开位置'
-    $openOutputButton.Location = New-Object System.Drawing.Point(725, 126)
+    $openOutputButton.Location = New-Object System.Drawing.Point(725, (if ($IsBatchChannelTask) { 164 } else { 126 }))
     $openOutputButton.Size = New-Object System.Drawing.Size(88, 28)
     $form.Controls.Add($openOutputButton)
 
@@ -851,69 +877,76 @@ function Select-TaskSettings {
     $outputHint.Text = '每次任务会自动新建文件夹，不会覆盖以前的成品。'
     $outputHint.AutoSize = $true
     $outputHint.ForeColor = [System.Drawing.Color]::DimGray
-    $outputHint.Location = New-Object System.Drawing.Point(125, 158)
+    $outputHint.Location = New-Object System.Drawing.Point(125, (if ($IsBatchChannelTask) { 196 } else { 158 }))
     $form.Controls.Add($outputHint)
 
     $sheetLabel = New-Object System.Windows.Forms.Label
     $sheetLabel.Text = '3  数据工作表'
     $sheetLabel.AutoSize = $true
-    $sheetLabel.Location = New-Object System.Drawing.Point(16, 195)
+    $sheetLabel.Location = New-Object System.Drawing.Point(16, (if ($IsBatchChannelTask) { 233 } else { 195 }))
+    $sheetLabel.Visible = -not $IsBatchChannelTask
     $form.Controls.Add($sheetLabel)
 
     $sheetCombo = New-Object System.Windows.Forms.ComboBox
-    $sheetCombo.Location = New-Object System.Drawing.Point(125, 192)
+    $sheetCombo.Location = New-Object System.Drawing.Point(125, (if ($IsBatchChannelTask) { 230 } else { 192 }))
     $sheetCombo.Size = New-Object System.Drawing.Size(300, 26)
     $sheetCombo.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
+    $sheetCombo.Visible = -not $IsBatchChannelTask
     $form.Controls.Add($sheetCombo)
 
     $reloadButton = New-Object System.Windows.Forms.Button
     $reloadButton.Text = '重新读取'
-    $reloadButton.Location = New-Object System.Drawing.Point(440, 190)
+    $reloadButton.Location = New-Object System.Drawing.Point(440, (if ($IsBatchChannelTask) { 228 } else { 190 }))
     $reloadButton.Size = New-Object System.Drawing.Size(96, 28)
+    $reloadButton.Visible = -not $IsBatchChannelTask
     $form.Controls.Add($reloadButton)
 
     $productLabel = New-Object System.Windows.Forms.Label
     $productLabel.Text = '4  商品范围'
     $productLabel.AutoSize = $true
-    $productLabel.Location = New-Object System.Drawing.Point(16, 243)
+    $productLabel.Location = New-Object System.Drawing.Point(16, (if ($IsBatchChannelTask) { 281 } else { 243 }))
+    $productLabel.Visible = -not $IsBatchChannelTask
     $form.Controls.Add($productLabel)
 
     $allProductsRadio = New-Object System.Windows.Forms.RadioButton
     $allProductsRadio.Text = '全部商品'
     $allProductsRadio.AutoSize = $true
-    $allProductsRadio.Location = New-Object System.Drawing.Point(125, 241)
+    $allProductsRadio.Location = New-Object System.Drawing.Point(125, (if ($IsBatchChannelTask) { 279 } else { 241 }))
+    $allProductsRadio.Visible = -not $IsBatchChannelTask
     $form.Controls.Add($allProductsRadio)
 
     $singleProductRadio = New-Object System.Windows.Forms.RadioButton
     $singleProductRadio.Text = '只生成勾选的商品'
     $singleProductRadio.AutoSize = $true
-    $singleProductRadio.Location = New-Object System.Drawing.Point(225, 241)
+    $singleProductRadio.Location = New-Object System.Drawing.Point(225, (if ($IsBatchChannelTask) { 279 } else { 241 }))
+    $singleProductRadio.Visible = -not $IsBatchChannelTask
     $form.Controls.Add($singleProductRadio)
 
     $productList = New-Object System.Windows.Forms.CheckedListBox
-    $productList.Location = New-Object System.Drawing.Point(125, 273)
+    $productList.Location = New-Object System.Drawing.Point(125, (if ($IsBatchChannelTask) { 311 } else { 273 }))
     $productList.Size = New-Object System.Drawing.Size(688, 166)
     $productList.CheckOnClick = $true
     $productList.Enabled = $false
+    $productList.Visible = -not $IsBatchChannelTask
     $form.Controls.Add($productList)
 
     $statusLabel = New-Object System.Windows.Forms.Label
     $statusLabel.Text = '请先选择商品信息表格。'
     $statusLabel.AutoEllipsis = $true
     $statusLabel.Size = New-Object System.Drawing.Size(797, 42)
-    $statusLabel.Location = New-Object System.Drawing.Point(16, 454)
+    $statusLabel.Location = New-Object System.Drawing.Point(16, (if ($IsBatchChannelTask) { 492 } else { 454 }))
     $form.Controls.Add($statusLabel)
 
     $runButton = New-Object System.Windows.Forms.Button
     $runButton.Text = '开始生成'
-    $runButton.Location = New-Object System.Drawing.Point(570, 510)
+    $runButton.Location = New-Object System.Drawing.Point(570, (if ($IsBatchChannelTask) { 548 } else { 510 }))
     $runButton.Size = New-Object System.Drawing.Size(138, 36)
     $form.Controls.Add($runButton)
     $form.AcceptButton = $runButton
 
     $cancelButton = New-Object System.Windows.Forms.Button
     $cancelButton.Text = '取消'
-    $cancelButton.Location = New-Object System.Drawing.Point(725, 510)
+    $cancelButton.Location = New-Object System.Drawing.Point(725, (if ($IsBatchChannelTask) { 548 } else { 510 }))
     $cancelButton.Size = New-Object System.Drawing.Size(88, 36)
     $form.Controls.Add($cancelButton)
     $form.CancelButton = $cancelButton
@@ -933,6 +966,7 @@ function Select-TaskSettings {
         param([bool]$Busy)
         $excelBrowse.Enabled = -not $Busy
         $psdBrowse.Enabled = -not $Busy
+        $psd750Browse.Enabled = -not $Busy
         $outputBrowse.Enabled = -not $Busy
         $openOutputButton.Enabled = -not $Busy
         $reloadButton.Enabled = -not $Busy
@@ -1052,6 +1086,13 @@ function Select-TaskSettings {
         }
     })
 
+    $psd750Browse.Add_Click({
+        $selected = Select-File -Title '请选择 750 PSD 模板文件' -Filter 'Photoshop PSD (*.psd)|*.psd'
+        if ($selected) {
+            $psd750Box.Text = $selected
+        }
+    })
+
     $outputBrowse.Add_Click({
         $selected = Select-Folder -Description '请选择输出保存位置'
         if ($selected) {
@@ -1095,16 +1136,21 @@ function Select-TaskSettings {
         Add-Log "Photoshop 前置检查通过：版本 $($photoshopCheck.Version)。"
         $candidateExcel = $excelBox.Text.Trim()
         $candidatePsd = $psdBox.Text.Trim()
+        $candidatePsd750 = $psd750Box.Text.Trim()
         $candidateOutput = $outputBox.Text.Trim()
         if (-not (Test-Path -LiteralPath $candidateExcel -PathType Leaf)) {
             $statusLabel.Text = '请重新选择可访问的 Excel 商品信息表格。'
             return
         }
-        if ($candidateExcel -ne $script:LoadedTaskSettingsExcelPath) {
+        if (-not $IsBatchChannelTask -and $candidateExcel -ne $script:LoadedTaskSettingsExcelPath) {
             if (-not (& $loadSheets '' '')) { return }
         }
         if (-not (Test-Path -LiteralPath $candidatePsd -PathType Leaf)) {
             $statusLabel.Text = '请重新选择可访问的 PSD 模板。'
+            return
+        }
+        if ($IsBatchChannelTask -and -not (Test-Path -LiteralPath $candidatePsd750 -PathType Leaf)) {
+            $statusLabel.Text = '请重新选择可访问的 750 PSD 模板。'
             return
         }
         if ([string]::IsNullOrWhiteSpace($candidateOutput)) {
@@ -1117,12 +1163,12 @@ function Select-TaskSettings {
             $statusLabel.Text = "成品保存位置不可用：$($_.Exception.Message)"
             return
         }
-        if (-not $sheetCombo.SelectedItem) {
+        if (-not $IsBatchChannelTask -and -not $sheetCombo.SelectedItem) {
             $statusLabel.Text = '请选择数据工作表。'
             return
         }
         $candidateProduct = ''
-        if ($singleProductRadio.Checked) {
+        if (-not $IsBatchChannelTask -and $singleProductRadio.Checked) {
             $selectedProducts = @($productList.CheckedItems | ForEach-Object { [string]$_ })
             if ($selectedProducts.Count -eq 0) {
                 $statusLabel.Text = '请勾选至少一个商品，或改选“全部商品”。'
@@ -1133,8 +1179,9 @@ function Select-TaskSettings {
         $form.Tag = [pscustomobject]@{
             ExcelPath = $candidateExcel
             PsdPath = $candidatePsd
+            Psd750Path = $candidatePsd750
             OutputRoot = $candidateOutput
-            SheetName = [string]$sheetCombo.SelectedItem
+            SheetName = if ($IsBatchChannelTask) { '' } else { [string]$sheetCombo.SelectedItem }
             ProductName = $candidateProduct
         }
         $form.DialogResult = [System.Windows.Forms.DialogResult]::OK
@@ -1146,7 +1193,9 @@ function Select-TaskSettings {
         $form.Close()
     })
 
-    if (-not [string]::IsNullOrWhiteSpace($InitialExcelPath) -and (Test-Path -LiteralPath $InitialExcelPath -PathType Leaf)) {
+    if ($IsBatchChannelTask) {
+        $statusLabel.Text = '天猫官旗会自动处理【现货-800】和【现货-750】两个工作表的全部商品。'
+    } elseif (-not [string]::IsNullOrWhiteSpace($InitialExcelPath) -and (Test-Path -LiteralPath $InitialExcelPath -PathType Leaf)) {
         [void](& $loadSheets $InitialSheetName $InitialProductName)
     } elseif (-not [string]::IsNullOrWhiteSpace($InitialExcelPath)) {
         $statusLabel.Text = "上次 Excel 不存在或不可访问，请重新选择：$InitialExcelPath"
@@ -1625,19 +1674,22 @@ function Resolve-TemplateForTask {
     if ($check.Status -ne 'NEEDS_PREP') {
         throw "PSD 模板检测失败：$($check.Message)"
     }
-    if ($NoUi) {
+    $canAutoPrepare = $selectedProfile -and $selectedProfile.template_bindings
+    if ($NoUi -and -not $canAutoPrepare) {
         throw "PSD 模板未完成智能化改造：$($check.Message)"
     }
 
-    $confirmText = "当前主图模板还不能直接套图：`r`n$($check.Message)`r`n`r`n是否自动生成一份可套图的模板副本并继续？`r`n原始模板不会被修改。"
-    $choice = [System.Windows.Forms.MessageBox]::Show(
-        $confirmText,
-        '主图模板检查',
-        [System.Windows.Forms.MessageBoxButtons]::YesNo,
-        [System.Windows.Forms.MessageBoxIcon]::Question
-    )
-    if ($choice -ne [System.Windows.Forms.DialogResult]::Yes) {
-        throw '已取消 PSD 自动智能化改造。本次未开始生成。'
+    if (-not $canAutoPrepare) {
+        $confirmText = "当前主图模板还不能直接套图：`r`n$($check.Message)`r`n`r`n是否自动生成一份可套图的模板副本并继续？`r`n原始模板不会被修改。"
+        $choice = [System.Windows.Forms.MessageBox]::Show(
+            $confirmText,
+            '主图模板检查',
+            [System.Windows.Forms.MessageBoxButtons]::YesNo,
+            [System.Windows.Forms.MessageBoxIcon]::Question
+        )
+        if ($choice -ne [System.Windows.Forms.DialogResult]::Yes) {
+            throw '已取消 PSD 自动智能化改造。本次未开始生成。'
+        }
     }
 
     Set-RunProgress -Stage '智能化改造 PSD 模板' -Detail '正在生成模板副本并转换商品图智能对象，原始 PSD 不会被修改。'
@@ -1708,6 +1760,60 @@ function Show-TaskCompletionDialog {
     [void]$form.ShowDialog()
 }
 
+function ConvertTo-ProcessArgument {
+    param([string]$Value)
+    return '"' + ([string]$Value).Replace('"', '""') + '"'
+}
+
+function Invoke-ConfiguredBatchVariants {
+    param(
+        [object]$ProfileConfig,
+        [string]$Excel,
+        [string]$Psd800,
+        [string]$Psd750,
+        [string]$Output,
+        [int]$RowLimit
+    )
+    $variantPsdPaths = @{ 'main-800' = $Psd800; 'main-750' = $Psd750 }
+    $results = @()
+    $dispatchLogDir = Join-Path $Output '任务调度记录'
+    New-Item -Path $dispatchLogDir -ItemType Directory -Force | Out-Null
+    foreach ($childVariant in @($ProfileConfig.batch_variants)) {
+        $childConfig = $ProfileConfig.variants.$childVariant
+        $childPsd = $variantPsdPaths[$childVariant]
+        if (-not $childConfig -or [string]::IsNullOrWhiteSpace($childConfig.sheet_name) -or [string]::IsNullOrWhiteSpace($childPsd)) {
+            $results += [pscustomobject]@{ Variant = $childVariant; ExitCode = 1; Message = '渠道配置缺少工作表或 PSD 模板。' }
+            continue
+        }
+        $childArguments = @(
+            '-NoLogo', '-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass',
+            '-File', (ConvertTo-ProcessArgument $PSCommandPath),
+            '-NoUi',
+            '-ExcelPath', (ConvertTo-ProcessArgument $Excel),
+            '-PsdPath', (ConvertTo-ProcessArgument $childPsd),
+            '-OutputRoot', (ConvertTo-ProcessArgument $Output),
+            '-SheetName', (ConvertTo-ProcessArgument ([string]$childConfig.sheet_name)),
+            '-ProductName', '"*"',
+            '-Profile', (ConvertTo-ProcessArgument ([string]$ProfileConfig.profile_id)),
+            '-Variant', (ConvertTo-ProcessArgument ([string]$childVariant))
+        )
+        if ($RowLimit -gt 0) {
+            $childArguments += @('-Limit', [string]$RowLimit)
+        }
+        Add-Log "开始处理 $childVariant：工作表 $($childConfig.sheet_name)，PSD $childPsd"
+        $childStdout = Join-Path $dispatchLogDir ("{0}.stdout.log" -f $childVariant)
+        $childStderr = Join-Path $dispatchLogDir ("{0}.stderr.log" -f $childVariant)
+        $process = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList ($childArguments -join ' ') -RedirectStandardOutput $childStdout -RedirectStandardError $childStderr -Wait -PassThru
+        $message = if ($process.ExitCode -eq 0) { '完成' } else {
+            $rawDetail = if (Test-Path -LiteralPath $childStderr) { Get-Content -LiteralPath $childStderr -Raw } else { '' }
+            $detail = if ($null -eq $rawDetail) { '' } else { ([string]$rawDetail).Trim() }
+            if ([string]::IsNullOrWhiteSpace($detail)) { '失败，详情请查看该规格任务文件夹中的任务记录。' } else { "失败：$detail" }
+        }
+        $results += [pscustomobject]@{ Variant = $childVariant; ExitCode = $process.ExitCode; Message = $message }
+    }
+    return @($results)
+}
+
 try {
     $script:Stage = '固定输出初始化'
     New-Item -Path $diagnosticDir -ItemType Directory -Force | Out-Null
@@ -1730,11 +1836,18 @@ try {
     $selectedProfile = @($profileDocument.profiles | Where-Object { $_.profile_id -eq $profileId }) | Select-Object -First 1
     if (-not $selectedProfile) { throw "E_PROFILE_UNSUPPORTED: 不支持的 profile：$profileId" }
     if ($selectedProfile.status -ne 'enabled') { throw "E_PROFILE_UNSUPPORTED: $($selectedProfile.approval_note)" }
+    $isBatchChannelTask = [string]::IsNullOrWhiteSpace($Variant) -and $selectedProfile.batch_variants -and @($selectedProfile.batch_variants).Count -gt 1
     $variantId = if ([string]::IsNullOrWhiteSpace($Variant)) { [string]$selectedProfile.default_variant } else { $Variant }
     $selectedVariant = $selectedProfile.variants.$variantId
     if (-not $selectedVariant) { throw "E_PROFILE_UNSUPPORTED: profile $profileId 不支持 variant：$variantId" }
     $selectedProfile | Add-Member -NotePropertyName variant -NotePropertyValue $variantId -Force
-    $selectedProfile | Add-Member -NotePropertyName target_size -NotePropertyValue $selectedVariant -Force
+    $selectedProfile | Add-Member -NotePropertyName target_size -NotePropertyValue ([pscustomobject]@{ width = $selectedVariant.width; height = $selectedVariant.height }) -Force
+    if ($selectedVariant.export_size) {
+        $selectedProfile | Add-Member -NotePropertyName export_size -NotePropertyValue $selectedVariant.export_size -Force
+    }
+    if ($selectedVariant.template_bindings) {
+        $selectedProfile | Add-Member -NotePropertyName template_bindings -NotePropertyValue $selectedVariant.template_bindings -Force
+    }
     $profileJson = $selectedProfile | ConvertTo-Json -Depth 8 -Compress
     Add-Log "Profile：$profileId@$($selectedProfile.profile_version)，variant：$variantId，目标尺寸：$($selectedVariant.width)x$($selectedVariant.height)"
 
@@ -1749,6 +1862,12 @@ try {
         if (-not (Test-Path -LiteralPath $PsdPath -PathType Leaf)) { throw "PSD 模板不存在：$PsdPath" }
         $psdPath = $PsdPath
         Add-Log "命令行指定 PSD：$psdPath"
+        if ($isBatchChannelTask) {
+            if ([string]::IsNullOrWhiteSpace($Psd750Path)) { throw '天猫官旗批量任务缺少 -Psd750Path。' }
+            if (-not (Test-Path -LiteralPath $Psd750Path -PathType Leaf)) { throw "750 PSD 模板不存在：$Psd750Path" }
+            $psd750Path = $Psd750Path
+            Add-Log "命令行指定 750 PSD：$psd750Path"
+        }
 
         if ([string]::IsNullOrWhiteSpace($OutputRoot)) { throw '命令行模式缺少 -OutputRoot。' }
         $outputRoot = $OutputRoot
@@ -1760,11 +1879,12 @@ try {
         Set-RunProgress -Stage '确认任务设置' -Detail '请在弹出的设置窗口确认 Excel、PSD、输出位置、Sheet 和商品范围。'
         $initialExcelPath = if (-not [string]::IsNullOrWhiteSpace($ExcelPath)) { $ExcelPath } else { Get-SettingText -Settings $script:Settings -Name 'excelPath' }
         $initialPsdPath = if (-not [string]::IsNullOrWhiteSpace($PsdPath)) { $PsdPath } else { Get-SettingText -Settings $script:Settings -Name 'psdPath' }
+        $initialPsd750Path = if (-not [string]::IsNullOrWhiteSpace($Psd750Path)) { $Psd750Path } else { Get-SettingText -Settings $script:Settings -Name 'psd750Path' }
         $initialOutputRoot = if (-not [string]::IsNullOrWhiteSpace($OutputRoot)) { $OutputRoot } else { Get-SettingText -Settings $script:Settings -Name 'outputRoot' }
         if ([string]::IsNullOrWhiteSpace($initialOutputRoot)) { $initialOutputRoot = Get-DefaultOutputRoot }
         $initialSheetName = if (-not [string]::IsNullOrWhiteSpace($SheetName)) { $SheetName } else { Get-SettingText -Settings $script:Settings -Name 'sheetName' }
         $initialProductName = if (-not [string]::IsNullOrWhiteSpace($ProductName)) { $ProductName } else { Get-SettingText -Settings $script:Settings -Name 'productName' }
-        $taskSettings = Select-TaskSettings -Python $python -InitialExcelPath $initialExcelPath -InitialPsdPath $initialPsdPath -InitialOutputRoot $initialOutputRoot -InitialSheetName $initialSheetName -InitialProductName $initialProductName
+        $taskSettings = Select-TaskSettings -Python $python -InitialExcelPath $initialExcelPath -InitialPsdPath $initialPsdPath -InitialPsd750Path $initialPsd750Path -InitialOutputRoot $initialOutputRoot -InitialSheetName $initialSheetName -InitialProductName $initialProductName -IsBatchChannelTask $isBatchChannelTask
         if (-not $taskSettings) {
             Write-EntryStatus -Status 'cancelled' -Message '用户取消了本次任务。'
             Write-TaskHistory -Status '已取消' -Message '用户在任务设置窗口取消。'
@@ -1772,14 +1892,33 @@ try {
         }
         $excelPath = $taskSettings.ExcelPath
         $psdPath = $taskSettings.PsdPath
+        $psd750Path = $taskSettings.Psd750Path
         $outputRoot = $taskSettings.OutputRoot
         $sheetName = $taskSettings.SheetName
         $selectedProduct = $taskSettings.ProductName
         Add-Log "窗口确认 Excel：$excelPath"
         Add-Log "窗口确认 PSD：$psdPath"
+        if ($isBatchChannelTask) { Add-Log "窗口确认 750 PSD：$psd750Path" }
         Add-Log "窗口确认输出目录：$outputRoot"
         Add-Log "窗口确认 Sheet：$sheetName"
         Add-Log "窗口确认商品任务：$(if ($selectedProduct) { $selectedProduct } else { '全部商品' })"
+    }
+
+    if ($isBatchChannelTask) {
+        $script:Stage = '天猫官旗双规格处理'
+        Save-UserSettings -ExcelPath $excelPath -PsdPath $psdPath -Psd750Path $psd750Path -OutputRoot $outputRoot -SheetName '' -ProductName ''
+        $batchResults = Invoke-ConfiguredBatchVariants -ProfileConfig $selectedProfile -Excel $excelPath -Psd800 $psdPath -Psd750 $psd750Path -Output $outputRoot -RowLimit $Limit
+        $batchSummary = ($batchResults | ForEach-Object { "$($_.Variant)：$($_.Message)" }) -join "`r`n"
+        $failedVariants = @($batchResults | Where-Object { $_.ExitCode -ne 0 })
+        Write-TaskHistory -Status $(if ($failedVariants.Count -gt 0) { '部分失败' } else { '已完成' }) -Message "天猫官旗双规格：$($batchSummary -replace "`r`n", '；')"
+        if ($failedVariants.Count -gt 0) {
+            Write-EntryFailureReport -ErrorSummary "天猫官旗双规格任务未全部完成：$batchSummary" -Suggestion '每个规格均已独立执行；请查看失败规格任务文件夹中的任务记录。'
+            if (-not $NoUi) { Show-TaskCompletionDialog -Title '套版处理完成，部分规格失败' -Message $batchSummary -JpgOutputDir $outputRoot }
+            exit 1
+        }
+        Write-EntryStatus -Status 'success' -Message "天猫官旗双规格处理完成。$batchSummary"
+        if (-not $NoUi) { Show-TaskCompletionDialog -Title '天猫官旗套版已完成' -Message $batchSummary -JpgOutputDir $outputRoot }
+        exit 0
     }
 
     $script:CurrentExcelPath = $excelPath
@@ -1870,7 +2009,7 @@ try {
         Add-Log "本次任务：$selectedProduct"
     }
     $script:CurrentProductName = $selectedProduct
-    Save-UserSettings -ExcelPath $excelPath -PsdPath $psdPath -OutputRoot $outputRoot -SheetName $sheetName -ProductName $selectedProduct
+    Save-UserSettings -ExcelPath $excelPath -PsdPath $psdPath -Psd750Path $Psd750Path -OutputRoot $outputRoot -SheetName $sheetName -ProductName $selectedProduct
     $taskInfo = @(
         '电商主图套版任务信息',
         '',

@@ -25,9 +25,11 @@ class ChannelProfileTest(unittest.TestCase):
         self.assertEqual(mapping["图片目录路径"], "产品")
         self.assertNotIn("变量08", mapping)
         self.assertNotIn("变量09", mapping)
-        self.assertEqual(profile["execution_mode"], "photoshop_variables")
-        self.assertEqual(profile["required_psd_variables"][0], {"name": "文件名称", "type": "text"})
-        self.assertEqual(profile["required_psd_variables"][-1], {"name": "产品", "type": "pixel_replacement"})
+        self.assertEqual(profile["execution_mode"], "legacy_layer_names")
+        self.assertEqual(profile["batch_variants"], ["main-800", "main-750"])
+        self.assertEqual(profile["sheet"]["sku_header"], "变量名称")
+        self.assertEqual(profile["required_psd_variables"][0], {"name": "利益点1", "type": "text"})
+        self.assertEqual(profile["required_psd_variables"][-1], {"name": "产品", "type": "smart_object"})
 
     def test_schema_mismatch_is_rejected(self) -> None:
         profile = get_profile("tmall-positional-v1", require_enabled=False)
@@ -37,14 +39,20 @@ class ChannelProfileTest(unittest.TestCase):
     def test_750_and_800_variants_are_isolated(self) -> None:
         tmall750 = get_profile("tmall-positional-v1", "main-750", require_enabled=False)
         tmall800 = get_profile("tmall-positional-v1", "main-800", require_enabled=False)
-        self.assertEqual(tmall750["target_size"], {"width": 750, "height": 750})
-        self.assertEqual(tmall800["target_size"], {"width": 800, "height": 800})
+        self.assertEqual(tmall750["target_size"], {"width": 1440, "height": 1920})
+        self.assertEqual(tmall800["target_size"], {"width": 1440, "height": 1440})
+        self.assertNotIn("export_size", tmall750)
+        self.assertNotIn("export_size", tmall800)
+        self.assertEqual(tmall750["sheet_name"], "现货-750")
+        self.assertEqual(tmall800["sheet_name"], "现货-800")
+        self.assertEqual(tmall750["template_bindings"]["产品"], "DT17100-20")
         with self.assertRaisesRegex(ProfileError, "E_PROFILE_UNSUPPORTED"):
             get_profile("jd-main-800-v1", "main-750", require_enabled=False)
 
-    def test_unapproved_profile_cannot_run(self) -> None:
+    def test_tmall_profile_is_enabled_and_unapproved_profile_is_rejected(self) -> None:
+        self.assertEqual(get_profile("tmall-positional-v1")["profile_id"], "tmall-positional-v1")
         with self.assertRaisesRegex(ProfileError, "E_PROFILE_UNSUPPORTED"):
-            get_profile("tmall-positional-v1")
+            get_profile("jd-main-800-v1")
 
 
 if __name__ == "__main__":
