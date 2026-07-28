@@ -15,6 +15,12 @@ from typing import Any
 
 from openpyxl import load_workbook
 
+# The embedded Windows Python runtime reads ``python311._pth`` and therefore
+# does not automatically add this script's folder to ``sys.path``.
+SCRIPT_DIR = str(Path(__file__).resolve().parent)
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
+
 from channel_profile import ProfileError, get_profile, map_vertical_headers
 
 

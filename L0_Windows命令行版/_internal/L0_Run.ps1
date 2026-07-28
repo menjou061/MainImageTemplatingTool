@@ -243,12 +243,6 @@ function Get-PhotoshopResultSummary {
     }
 
     $rows = @(Import-Csv -LiteralPath $ResultReport -Encoding UTF8)
-    $criticalCodes = @(
-        'E_TEMPLATE_INVALID', 'E_MISSING_IMAGE', 'E_PRICE_INVALID', 'E_EMPTY_FIELD',
-        'E_VAR_MISSING', 'E_VAR_UNBOUND', 'E_VAR_TYPE_MISMATCH',
-        'E_SIZE_MISMATCH', 'E_PROFILE_UNSUPPORTED', 'E_PROFILE_SCHEMA_MISMATCH',
-        'E_CONFIG_MISMATCH'
-    )
     $criticalRows = New-Object System.Collections.Generic.List[object]
     $failedRows = New-Object System.Collections.Generic.List[object]
     $reviewRows = New-Object System.Collections.Generic.List[object]
@@ -257,12 +251,13 @@ function Get-PhotoshopResultSummary {
         $status = [string]$row.状态
         $codes = [string]$row.错误码
         $hasOutput = -not [string]::IsNullOrWhiteSpace([string]$row.输出文件)
-        $hasCriticalCode = $false
-        foreach ($code in $criticalCodes) {
-            if ($codes -match "(^|;)$([regex]::Escape($code))(;|$)") {
-                $hasCriticalCode = $true
-                break
-            }
+        $hasCriticalCode = ([string]$row.severity -eq 'E') -or (@($codes -split ';' | Where-Object {
+            $_ -like 'E_*'
+        }).Count -gt 0)
+        if ($hasCriticalCode) {
+            $criticalRows.Add($row) | Out-Null
+            $failedRows.Add($row) | Out-Null
+            continue
         }
         # A row with an actual JPG is not an export failure.  Field/image
         # warnings remain visible as "需复核" so the designer can decide
@@ -274,16 +269,15 @@ function Get-PhotoshopResultSummary {
         } else {
             $reviewRows.Add($row) | Out-Null
         }
-        if ($hasCriticalCode -and -not $hasOutput) {
-            $criticalRows.Add($row) | Out-Null
-        }
     }
 
     $exportedCount = @(Get-ChildItem -LiteralPath $JpgOutputDir -Filter '*.jpg' -File -ErrorAction SilentlyContinue).Count
     $outcome = 'success'
     if ($rows.Count -eq 0 -or ($exportedCount -eq 0 -and $failedRows.Count -eq 0 -and $reviewRows.Count -eq 0)) {
         $outcome = 'failed'
-    } elseif ($reviewRows.Count -gt 0 -or $failedRows.Count -gt 0 -or $criticalRows.Count -gt 0) {
+    } elseif ($criticalRows.Count -gt 0) {
+        $outcome = 'failed'
+    } elseif ($reviewRows.Count -gt 0 -or $failedRows.Count -gt 0) {
         $outcome = 'needs_review'
     }
 
@@ -777,7 +771,7 @@ function Select-TaskSettings {
     )
 
     $form = New-Object System.Windows.Forms.Form
-    $form.Text = '电商主图套版工具 1.0'
+    $form.Text = '电商主图套版工具 1.1'
     $form.StartPosition = 'CenterScreen'
     $form.Size = New-Object System.Drawing.Size(860, 610)
     $form.MinimumSize = New-Object System.Drawing.Size(860, 610)
@@ -1994,7 +1988,7 @@ try {
         ('  csv: {0},' -f (ConvertTo-JsStringLiteral $dataCsv)),
         ('  output: {0},' -f (ConvertTo-JsStringLiteral $jpgOutputDir)),
         ('  psdOutput: {0},' -f (ConvertTo-JsStringLiteral $psdOutputDir)),
-        ('  continueWithPreflightIssues: {0}' -f ($(if ($preflightMode -eq 'all_rows') { 'true' } else { 'false' }))),
+        ('  continueWithPreflightIssues: {0},' -f ($(if ($preflightMode -eq 'all_rows') { 'true' } else { 'false' }))),
         ('  profile: {0}' -f $profileJson),
         '};'
     ) -join "`r`n"

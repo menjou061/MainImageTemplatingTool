@@ -4,7 +4,8 @@
     [Parameter(Mandatory = $true)][string]$PsdPath,
     [Parameter(Mandatory = $true)][string]$OutputRoot,
     [Parameter(Mandatory = $true)][string]$ArtifactDir,
-    [switch]$UseSingleProduct
+    [switch]$UseSingleProduct,
+    [switch]$RequireTextOverflow
 )
 
 $ErrorActionPreference = 'Stop'
@@ -185,7 +186,7 @@ try {
     $arguments = '/d /c call "{0}"' -f $entry
     $process = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\cmd.exe') -ArgumentList $arguments -WindowStyle Normal -PassThru
 
-    $mainWindow = Wait-DesktopWindow -Title '电商主图套版工具 1.0' -TimeoutSeconds 45
+    $mainWindow = Wait-DesktopWindow -Title '电商主图套版工具 1.1' -TimeoutSeconds 45
     Show-AutomationWindow -Window $mainWindow
     $photoshopHint = Get-Control -Root $mainWindow -Name '请先启动并登录 Photoshop，进入首页后再选择商品表格和 PSD 模板。' -ControlType ([System.Windows.Automation.ControlType]::Text)
     if (-not $photoshopHint) { throw '初始页缺少 Photoshop 启动提醒。' }
@@ -205,7 +206,7 @@ try {
     Invoke-Control -Control (Get-Control -Root $mainWindow -Name '重新读取' -ControlType ([System.Windows.Automation.ControlType]::Button))
     Start-Sleep -Seconds 5
 
-    $mainWindow = Wait-DesktopWindow -Title '电商主图套版工具 1.0'
+    $mainWindow = Wait-DesktopWindow -Title '电商主图套版工具 1.1'
     Show-AutomationWindow -Window $mainWindow
     Write-ControlSnapshot -Window $mainWindow -Label '表格已加载'
     Capture-Desktop -Name '02-表格已加载.png'
@@ -293,13 +294,18 @@ try {
     }
 
     $blockingStatuses = @('处理失败', '模板错误', '数据需核对', '缺图', '字段为空')
-    $criticalCodes = @('E_TEMPLATE_INVALID', 'E_MISSING_IMAGE', 'E_PRICE_INVALID', 'E_EMPTY_FIELD')
     $blockingRows = @($resultRows | Where-Object {
         $row = $_
         ($blockingStatuses -contains [string]$row.状态) -or
-        @([string]$row.错误码 -split ';' | Where-Object { $criticalCodes -contains $_ }).Count -gt 0
+        ([string]$row.severity -eq 'E') -or
+        @([string]$row.错误码 -split ';' | Where-Object { $_ -like 'E_*' }).Count -gt 0
     })
     if ($blockingRows.Count -gt 0) {
+        foreach ($row in $blockingRows) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$row.输出文件) -or -not [string]::IsNullOrWhiteSpace([string]$row.输出PSD)) {
+                throw "错误行不应导出 JPG 或 PSD：$($row.商品文件名) [$($row.错误码)]"
+            }
+        }
         $details = ($blockingRows | ForEach-Object { "$($_.商品文件名)：$($_.状态) [$($_.错误码)]" }) -join '；'
         throw "结果报告存在阻断错误：$details"
     }
@@ -322,7 +328,7 @@ try {
     foreach ($jpg in $jpgFiles) {
         $image = [System.Drawing.Image]::FromFile($jpg.FullName)
         try {
-            if ($image.Width -lt 1 -or $image.Height -lt 1 -or $image.Width -ne $image.Height) {
+            if ($image.Width -ne 800 -or $image.Height -ne 800) {
                 throw "JPG 尺寸异常：$($jpg.FullName)，$($image.Width)x$($image.Height)"
             }
         } finally {
@@ -358,6 +364,9 @@ try {
             Sort-Object -Unique
     )
     $warningText = if ($warningCodes.Count -gt 0) { $warningCodes -join ',' } else { 'none' }
+    if ($RequireTextOverflow -and $warningCodes -notcontains 'W_TEXT_OVERFLOW') {
+        throw '回归夹具应触发 W_TEXT_OVERFLOW，且该警告必须不阻断 JPG/PSD 导出。'
+    }
     Write-SmokeLog "PASS：结果=$($resultRows.Count)，JPG=$($jpgFiles.Count)，PSD=$($psdFiles.Count)，status=$($globalStatus.status)，warnings=$warningText。"
     Set-Content -LiteralPath (Join-Path $ArtifactDir 'PASS.txt') -Value "Results=$($resultRows.Count)`r`nJPG=$($jpgFiles.Count)`r`nPSD=$($psdFiles.Count)`r`nStatus=$($globalStatus.status)`r`nWarnings=$warningText" -Encoding UTF8
 } catch {

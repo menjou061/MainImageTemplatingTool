@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions DisableDelayedExpansion
-title Main Image Templating Tool 1.0
+title Main Image Templating Tool 1.1
 
 set "BASE=%~dp0"
 set "RUNNER=%BASE%_internal\L0_Run.bat"
