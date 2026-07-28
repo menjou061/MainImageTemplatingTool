@@ -1,0 +1,51 @@
+"""Contract tests for versioned channel profiles; no Photoshop integration is faked."""
+from __future__ import annotations
+
+import sys
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+INTERNAL = ROOT / "L0_Windows命令行版" / "_internal"
+sys.path.insert(0, str(INTERNAL))
+
+from channel_profile import ProfileError, get_profile, map_vertical_headers
+
+
+class ChannelProfileTest(unittest.TestCase):
+    def test_tmall_mapping_and_ignored_columns(self) -> None:
+        profile = get_profile("tmall-positional-v1", require_enabled=False)
+        mapping = map_vertical_headers(
+            ["变量名称", "SKU", "变量01", "变量02", "变量03", "变量04", "变量05", "变量06", "变量07", "图片目录路径", "变量08", "变量09"],
+            profile,
+        )
+        self.assertEqual(mapping["SKU"], "文件名称")
+        self.assertEqual(mapping["变量01"], "利益点1")
+        self.assertEqual(mapping["变量03"], "预估到手价")
+        self.assertEqual(mapping["图片目录路径"], "产品")
+        self.assertNotIn("变量08", mapping)
+        self.assertNotIn("变量09", mapping)
+        self.assertEqual(profile["execution_mode"], "photoshop_variables")
+        self.assertEqual(profile["required_psd_variables"][0], {"name": "文件名称", "type": "text"})
+        self.assertEqual(profile["required_psd_variables"][-1], {"name": "产品", "type": "pixel_replacement"})
+
+    def test_schema_mismatch_is_rejected(self) -> None:
+        profile = get_profile("tmall-positional-v1", require_enabled=False)
+        with self.assertRaisesRegex(ProfileError, "E_PROFILE_SCHEMA_MISMATCH"):
+            map_vertical_headers(["变量名称", "SKU", "变量01"], profile)
+
+    def test_750_and_800_variants_are_isolated(self) -> None:
+        tmall750 = get_profile("tmall-positional-v1", "main-750", require_enabled=False)
+        tmall800 = get_profile("tmall-positional-v1", "main-800", require_enabled=False)
+        self.assertEqual(tmall750["target_size"], {"width": 750, "height": 750})
+        self.assertEqual(tmall800["target_size"], {"width": 800, "height": 800})
+        with self.assertRaisesRegex(ProfileError, "E_PROFILE_UNSUPPORTED"):
+            get_profile("jd-main-800-v1", "main-750", require_enabled=False)
+
+    def test_unapproved_profile_cannot_run(self) -> None:
+        with self.assertRaisesRegex(ProfileError, "E_PROFILE_UNSUPPORTED"):
+            get_profile("tmall-positional-v1")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -7,6 +7,7 @@
  */
 
 var REQUIRED_TEXT_KEYS = ["卖点", "规格", "到手", "价格1", "价格2", "券名", "折扣", "券门槛", "活动时间"];
+var CHANNEL_PROFILE = $.global.__TEMPLATE_PREP_INPUTS__ && $.global.__TEMPLATE_PREP_INPUTS__.profile;
 var TEXT_NAME_MAP = {
     "卖点": "@卖点",
     "规格": "@规格",
@@ -63,8 +64,57 @@ function findNamedLayers(document, name) {
     return matches;
 }
 
+function usesPhotoshopVariables() {
+    return !!(CHANNEL_PROFILE && CHANNEL_PROFILE.execution_mode === "photoshop_variables");
+}
+
+function expectedVariableKind(type) {
+    return type === "text" ? VariableKind.TEXT : VariableKind.PIXELREPLACEMENT;
+}
+
+function findDocumentVariable(document, name) {
+    if (!document.variables) { return null; }
+    for (var index = 0; index < document.variables.length; index++) {
+        if (document.variables[index].name === name) {
+            return document.variables[index];
+        }
+    }
+    return null;
+}
+
 function templateProblems(document) {
     var issues = [];
+    if (usesPhotoshopVariables()) {
+        for (var variableIndex = 0; variableIndex < CHANNEL_PROFILE.required_psd_variables.length; variableIndex++) {
+            var variableRequired = CHANNEL_PROFILE.required_psd_variables[variableIndex];
+            var documentVariable = findDocumentVariable(document, variableRequired.name);
+            if (!documentVariable) {
+                issues.push("E_VAR_MISSING: " + variableRequired.name);
+            } else if (documentVariable.kind !== expectedVariableKind(variableRequired.type)) {
+                issues.push("E_VAR_TYPE_MISMATCH: " + variableRequired.name);
+            }
+        }
+        return issues;
+    }
+    if (CHANNEL_PROFILE && CHANNEL_PROFILE.required_psd_variables) {
+        for (var profileIndex = 0; profileIndex < CHANNEL_PROFILE.required_psd_variables.length; profileIndex++) {
+            var required = CHANNEL_PROFILE.required_psd_variables[profileIndex];
+            var expectedName = (required.type === "text" ? "@" : "!") + required.name;
+            var bound = findNamedLayers(document, expectedName);
+            if (bound.length === 0) {
+                issues.push("E_VAR_UNBOUND: " + expectedName);
+                continue;
+            }
+            for (var boundIndex = 0; boundIndex < bound.length; boundIndex++) {
+                if ((required.type === "text" && !isTextLayer(bound[boundIndex])) ||
+                    (required.type === "smart_object" && !isSmartObject(bound[boundIndex]))) {
+                    issues.push("E_VAR_TYPE_MISMATCH: " + expectedName);
+                    break;
+                }
+            }
+        }
+        return issues;
+    }
     for (var index = 0; index < REQUIRED_TEXT_KEYS.length; index++) {
         var key = REQUIRED_TEXT_KEYS[index];
         var matches = findNamedLayers(document, "@" + key);
@@ -124,7 +174,11 @@ function hasLegacyChannelDesignSignals(document) {
 function inspectPreparation(document) {
     var existing = templateProblems(document);
     if (existing.length === 0) {
-        return { status: "READY", message: "模板已符合 @文本、!智能对象命名规范。" };
+        return { status: "READY", message: usesPhotoshopVariables() ? "模板 PSD Variables 名称、类型和绑定关系已通过体检。" : "模板已符合 @文本、!智能对象命名规范。" };
+    }
+
+    if (usesPhotoshopVariables()) {
+        return { status: "AMBIGUOUS", message: "PSD Variables 体检未通过：" + existing.join("；") + "。请模板制作人员恢复变量绑定后重试。" };
     }
 
     if (hasLegacyChannelDesignSignals(document)) {

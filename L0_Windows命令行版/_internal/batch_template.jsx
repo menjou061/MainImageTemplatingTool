@@ -8,6 +8,7 @@
 var REPORT_NAME = "结果报告.csv";
 var PRODUCT_VERTICAL_OFFSET_PX = 32;
 var CONTINUE_WITH_PREFLIGHT_ISSUES = !!($.global.__BATCH_INPUTS__ && $.global.__BATCH_INPUTS__.continueWithPreflightIssues);
+var CHANNEL_PROFILE = ($.global.__BATCH_INPUTS__ && $.global.__BATCH_INPUTS__.profile) || null;
 
 function trimText(value) {
     return String(value == null ? "" : value).replace(/^\s+|\s+$/g, "");
@@ -233,8 +234,29 @@ function makeResult(productName, record) {
         templateInvalid: false,
         processingFailed: false,
         outputFile: "",
-        psdOutputFile: ""
+        psdOutputFile: "",
+        variableBindingStatus: CHANNEL_PROFILE && CHANNEL_PROFILE.execution_mode === "photoshop_variables" ? "photoshop_variables" : "legacy_prefix",
+        profileId: record && record.profile_id || (CHANNEL_PROFILE && CHANNEL_PROFILE.profile_id) || "legacy-v1",
+        profileVersion: record && record.profile_version || (CHANNEL_PROFILE && CHANNEL_PROFILE.profile_version) || "1.0.0"
     };
+}
+
+function usesPhotoshopVariables(profile) {
+    return !!(profile && profile.execution_mode === "photoshop_variables");
+}
+
+function expectedVariableKind(type) {
+    return type === "text" ? VariableKind.TEXT : VariableKind.PIXELREPLACEMENT;
+}
+
+function findDocumentVariable(document, name) {
+    if (!document.variables) { return null; }
+    for (var index = 0; index < document.variables.length; index++) {
+        if (document.variables[index].name === name) {
+            return document.variables[index];
+        }
+    }
+    return null;
 }
 
 function priceValidationError(record) {
@@ -295,11 +317,59 @@ function keyCount(collection) {
     return count;
 }
 
+function profileBindingErrors(template, profile) {
+    if (!profile || !profile.required_psd_variables) { return []; }
+    if (usesPhotoshopVariables(profile)) {
+        var variableErrors = [];
+        for (var variableIndex = 0; variableIndex < profile.required_psd_variables.length; variableIndex++) {
+            var variableRequired = profile.required_psd_variables[variableIndex];
+            var documentVariable = findDocumentVariable(template, variableRequired.name);
+            if (!documentVariable) {
+                variableErrors.push("E_VAR_MISSING: " + variableRequired.name);
+            } else if (documentVariable.kind !== expectedVariableKind(variableRequired.type)) {
+                variableErrors.push("E_VAR_TYPE_MISMATCH: " + variableRequired.name);
+            }
+        }
+        return variableErrors;
+    }
+    var layerIndex = { text: {}, image: {}, switches: {} };
+    addLayers(template, layerIndex);
+    var errors = [];
+    for (var index = 0; index < profile.required_psd_variables.length; index++) {
+        var required = profile.required_psd_variables[index];
+        var collection = required.type === "text" ? layerIndex.text : layerIndex.image;
+        if (!collection[required.name] || collection[required.name].length === 0) {
+            errors.push("E_VAR_UNBOUND: " + required.name + " 未绑定到 " + (required.type === "text" ? "@文本层" : "!智能对象"));
+            continue;
+        }
+        for (var layerIndexValue = 0; layerIndexValue < collection[required.name].length; layerIndexValue++) {
+            var layer = collection[required.name][layerIndexValue];
+            if ((required.type === "text" && layer.kind !== LayerKind.TEXT) ||
+                (required.type === "smart_object" && layer.kind !== LayerKind.SMARTOBJECT)) {
+                errors.push("E_VAR_TYPE_MISMATCH: " + required.name);
+                break;
+            }
+        }
+    }
+    return errors;
+}
+
 function validateTemplate(template) {
+    if (usesPhotoshopVariables(CHANNEL_PROFILE)) {
+        var variableBindingErrors = profileBindingErrors(template, CHANNEL_PROFILE);
+        if (variableBindingErrors.length) {
+            throw new Error(variableBindingErrors.join("；"));
+        }
+        return;
+    }
     var layerIndex = { text: {}, image: {}, switches: {} };
     addLayers(template, layerIndex);
     if (keyCount(layerIndex.text) === 0 || keyCount(layerIndex.image) === 0) {
         throw new Error("当前 PSD 尚未按规范完成改造：至少需要一个 @文本层和一个 !智能对象层。");
+    }
+    var bindingErrors = profileBindingErrors(template, CHANNEL_PROFILE);
+    if (bindingErrors.length) {
+        throw new Error(bindingErrors.join("；"));
     }
 }
 
@@ -745,6 +815,11 @@ function setImageLayer(layer, value, key, record, materialIndex, result) {
 }
 
 function applyRecord(document, record, materialIndex, result) {
+    if (usesPhotoshopVariables(CHANNEL_PROFILE)) {
+        applyPhotoshopVariables(document, record, materialIndex, result);
+        applyPreflightIssue(record, result);
+        return;
+    }
     var layerIndex = { text: {}, image: {}, switches: {} };
     addLayers(document, layerIndex);
     setSwitches(layerIndex, record, result);
@@ -771,12 +846,74 @@ function applyRecord(document, record, materialIndex, result) {
     applyPreflightIssue(record, result);
 }
 
-function exportJpeg(document, outputFolder, productName) {
+function applyPhotoshopVariables(document, record, materialIndex, result) {
+    var variables = [];
+    var values = [];
+    for (var index = 0; index < CHANNEL_PROFILE.required_psd_variables.length; index++) {
+        var required = CHANNEL_PROFILE.required_psd_variables[index];
+        var value = record[required.name];
+        var variable = findDocumentVariable(document, required.name);
+        if (!variable) {
+            result.templateInvalid = true;
+            addCode(result, "E_VAR_MISSING");
+            addIssue(result, "PSD 变量缺失：" + required.name);
+            continue;
+        }
+        if (variable.kind !== expectedVariableKind(required.type)) {
+            result.templateInvalid = true;
+            addCode(result, "E_VAR_TYPE_MISMATCH");
+            addIssue(result, "PSD 变量类型不匹配：" + required.name);
+            continue;
+        }
+        if (required.type === "text") {
+            if (isBlank(value)) {
+                result.emptyField = true;
+                addCode(result, "E_EMPTY_FIELD");
+                addIssue(result, "字段为空：" + required.name);
+                continue;
+            }
+            variables.push(variable);
+            values.push(String(value));
+        } else {
+            var imageFile = findMaterial(value, materialIndex);
+            if (!imageFile) {
+                result.missingImage = true;
+                addCode(result, isBlank(value) ? "E_EMPTY_FIELD" : "E_MISSING_IMAGE");
+                addIssue(result, isBlank(value) ? "字段为空：" + required.name : "缺图：" + required.name + "=" + value);
+                continue;
+            }
+            variables.push(variable);
+            values.push(imageFile);
+        }
+    }
+    if (hasErrorCode(result)) { return; }
+    try {
+        // Data Set names are deliberately generated per run. Existing PSD data-set
+        // names are reference content only and never participate in SKU matching.
+        var dataSet = document.dataSets.add("__l0_" + safeOutputName(record["商品文件名"]) + "_" + (new Date().getTime()), variables, values);
+        dataSet.apply();
+        result.variableBindingStatus = "photoshop_variables_applied";
+    } catch (error) {
+        result.templateInvalid = true;
+        addCode(result, "E_VAR_UNBOUND");
+        addIssue(result, "PSD Variables 绑定或应用失败：" + error.message);
+    }
+}
+
+function validateTargetSize(document) {
     var width = Math.round(document.width.as("px"));
     var height = Math.round(document.height.as("px"));
-    if (width !== height) {
-        throw new Error("模板不是正方形，未强制拉伸：" + width + "x" + height);
+    var target = CHANNEL_PROFILE && CHANNEL_PROFILE.target_size;
+    if (target && (width !== target.width || height !== target.height)) {
+        throw new Error("E_SIZE_MISMATCH: 模板尺寸 " + width + "x" + height + "，profile 要求 " + target.width + "x" + target.height);
     }
+    if (!target && width !== height) {
+        throw new Error("E_SIZE_MISMATCH: 模板不是正方形，未强制拉伸：" + width + "x" + height);
+    }
+}
+
+function exportJpeg(document, outputFolder, productName) {
+    validateTargetSize(document);
     if (document.mode !== DocumentMode.RGB) {
         document.changeMode(ChangeMode.RGB);
     }
@@ -837,24 +974,42 @@ function statusFor(result) {
     return "成功";
 }
 
+function hasErrorCode(result) {
+    for (var index = 0; index < result.codes.length; index++) {
+        if (startsWith(result.codes[index], "E_")) { return true; }
+    }
+    return false;
+}
+
+function severityFor(result) {
+    if (hasErrorCode(result) || result.processingFailed || result.templateInvalid || result.validationFailed) { return "E"; }
+    if (result.codes.length || result.preflightIssue || result.textOverflow || result.optionalImageMissing) { return "W"; }
+    return "OK";
+}
+
 function writeReport(outputFolder, results) {
     var reportFile = File(outputFolder.fsName + "/" + REPORT_NAME);
     reportFile.encoding = "UTF8";
     if (!reportFile.open("w")) {
         throw new Error("无法写入结果报告：" + reportFile.fsName);
     }
-    reportFile.write("\uFEFF货号,商品文件名,状态,错误码,中文说明,建议动作,输出文件,输出PSD\n");
+    reportFile.write("\uFEFF货号,商品文件名,profile_id,profile_version,severity,variable_binding_status,状态,错误码,中文说明,建议动作,输出文件,输出PSD,未导出\n");
     for (var index = 0; index < results.length; index++) {
         var result = results[index];
         reportFile.write(
             csvEscape(result.sku) + "," +
             csvEscape(result.productName) + "," +
+            csvEscape(result.profileId) + "," +
+            csvEscape(result.profileVersion) + "," +
+            csvEscape(severityFor(result)) + "," +
+            csvEscape(result.variableBindingStatus) + "," +
             csvEscape(statusFor(result)) + "," +
             csvEscape(result.codes.join(";")) + "," +
             csvEscape(result.issues.join("；")) + "," +
             csvEscape(suggestAction(result)) + "," +
             csvEscape(result.outputFile) + "," +
-            csvEscape(result.psdOutputFile) + "\n"
+            csvEscape(result.psdOutputFile) + "," +
+            csvEscape(isBlank(result.outputFile) && isBlank(result.psdOutputFile) ? "是" : "否") + "\n"
         );
     }
     reportFile.close();
@@ -916,13 +1071,17 @@ function processRecord(template, record, materialIndex, outputFolder, psdOutputF
         copy = template.duplicate();
         app.activeDocument = copy;
         applyRecord(copy, record, materialIndex, result);
+        if (hasErrorCode(result)) {
+            return result;
+        }
+        validateTargetSize(copy);
         var psdOutputFile = exportPsd(copy, psdOutputFolder, productName);
         result.psdOutputFile = psdOutputFile.fsName;
         var outputFile = exportJpeg(copy, outputFolder, productName);
         result.outputFile = outputFile.fsName;
     } catch (error) {
         result.processingFailed = true;
-        addCode(result, "E_TEMPLATE_INVALID");
+        addCode(result, String(error.message).indexOf("E_SIZE_MISMATCH") >= 0 ? "E_SIZE_MISMATCH" : "E_TEMPLATE_INVALID");
         addIssue(result, "处理失败：" + error.message);
     } finally {
         if (copy) {

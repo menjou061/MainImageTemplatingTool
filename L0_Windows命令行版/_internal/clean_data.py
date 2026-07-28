@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""Convert supported e-commerce Excel layouts into UTF-8 CSV rows.
-
-Both the original horizontal matrix and the common channel export with one
-product per row are accepted.  The latter is normalized through the built-in
-``变量01``...``变量09`` channel profile so a designer does not need to
-transpose or rebuild a workbook by hand.
-"""
+"""Convert explicitly profiled e-commerce Excel layouts into UTF-8 CSV rows."""
 
 from __future__ import annotations
 
@@ -21,6 +15,8 @@ from typing import Any
 
 from openpyxl import load_workbook
 
+from channel_profile import ProfileError, get_profile, map_vertical_headers
+
 
 NAME_MAP = {
     "文件名": "商品文件名",
@@ -33,26 +29,6 @@ NAME_MAP = {
     "DT17090-24旧": "旧包装图",
     "正式618新旧包装底": "新旧包装底图",
 }
-# A number of channel workbooks use positional variables instead of business
-# names.  This is intentionally a narrow, documented profile: it mirrors the
-# supplied ``干巾`` workbook and avoids guessing when a future channel changes
-# the meaning or order of its variables.
-VERTICAL_NAME_MAP = {
-    "图片目录路径": "商品图",
-    "图片路径": "商品图",
-    "图片文件路径": "商品图",
-    "商品图片": "商品图",
-    "变量01": "折扣",
-    "变量02": "券名",
-    "变量03": "到手",
-    "变量04": "价格1",
-    "变量05": "价格2",
-    "变量06": "规格",
-    "变量07": "卖点",
-    "变量08": "商品图片文件名",
-    "变量09": "商品图片目录",
-}
-VERTICAL_REQUIRED_RECORD_FIELDS = {"到手", "卖点", "规格"}
 REQUIRED_IMAGE_FIELDS = {"商品图"}
 REQUIRED_RECORD_FIELDS = {"活动时间", "到手", "卖点", "规格"}
 STANDARD_COLUMNS = [
@@ -114,11 +90,6 @@ def is_vertical_layout(ws) -> bool:
 def field_name(value: Any) -> str:
     raw = as_text(value)
     return NAME_MAP.get(raw, raw)
-
-
-def vertical_field_name(value: Any) -> str:
-    raw = as_text(value)
-    return VERTICAL_NAME_MAP.get(raw, field_name(raw))
 
 
 def image_basename(value: str) -> str:
@@ -246,14 +217,16 @@ def choose_inputs(args: argparse.Namespace) -> tuple[Path, str, Path]:
     return workbook_path, sheet, output_dir
 
 
-def source_variables(ws, layout: str = "horizontal") -> list[tuple[int, str]]:
+def source_variables(ws, layout: str = "horizontal", profile: dict[str, Any] | None = None) -> list[tuple[int, str]]:
     variables: list[tuple[int, str]] = []
     if layout == "vertical":
-        for column in range(2, ws.max_column + 1):
-            raw = ws.cell(1, column).value
-            if is_blank(raw) or is_display_image_formula(raw):
+        headers = [as_text(ws.cell(1, column).value) for column in range(1, ws.max_column + 1)]
+        header_mapping = map_vertical_headers(headers, profile or {})
+        for column in range(1, ws.max_column + 1):
+            raw = as_text(ws.cell(1, column).value)
+            if raw not in header_mapping:
                 continue
-            name = vertical_field_name(raw)
+            name = header_mapping[raw]
             validate_variable_name(name)
             variables.append((column, name))
         return variables
@@ -265,7 +238,7 @@ def source_variables(ws, layout: str = "horizontal") -> list[tuple[int, str]]:
         # These are worksheet notes, not data fields for a product row.
         if raw_name.startswith("\\\\") or raw_name.startswith("//"):
             continue
-        name = field_name(raw_name)
+        name = (profile or {}).get("mapping", {}).get(raw_name, field_name(raw_name))
         validate_variable_name(name)
         variables.append((row, name))
     return variables
@@ -318,32 +291,12 @@ def row_from_vertical(
         text = normalize_price_part(value, target_name)
         row[target_name] = normalize_image_reference(text)
 
-    # Some channel exports split the image path into directory + filename.
-    # Prefer the explicit full path column when present, then compose it from
-    # the two parts used by the supplied 现货-800 sheet.
-    if is_blank(row.get("商品图", "")):
-        directory = as_text(row.get("商品图片目录", ""))
-        filename = as_text(row.get("商品图片文件名", ""))
-        if directory and filename:
-            row["商品图"] = directory.rstrip("\\/") + "\\" + filename.lstrip("\\/")
-
     if "价格" in row and is_blank(row.get("价格1")) and is_blank(row.get("价格2")):
         row["价格1"], row["价格2"] = split_price(row["价格"])
     elif is_blank(row.get("价格2")) and re.fullmatch(r"\d+\.\d+", row.get("价格1", "")):
         row["价格1"], row["价格2"] = split_price(row["价格1"])
 
-    coupon_fields = [row.get("折扣", ""), row.get("券名", ""), row.get("券门槛", "")]
-    filled = [not is_blank(value) for value in coupon_fields]
-    if not any(filled):
-        row["优惠券开关"] = "否"
-    elif all(filled):
-        row["优惠券开关"] = "是"
-    else:
-        # In the positional channel profile 变量01/02 are promotional copy,
-        # not a three-part coupon contract. Keep the copy available for
-        # matching text layers, but do not mark the row invalid because this
-        # channel intentionally has no 券门槛 column.
-        row["优惠券开关"] = "否"
+    row["优惠券开关"] = "否"
     return row
 
 
@@ -355,9 +308,9 @@ def quality_score(record: dict[str, str]) -> int:
     return sum(1 for key, value in record.items() if key not in {"预检异常", "优惠券开关"} and not is_blank(value))
 
 
-def add_material_precheck(record: dict[str, str]) -> None:
+def add_material_precheck(record: dict[str, str], image_fields: set[str] | None = None) -> None:
     """Validate each Excel-provided image address without scanning a folder."""
-    for field in REQUIRED_IMAGE_FIELDS:
+    for field in image_fields or REQUIRED_IMAGE_FIELDS:
         image_path = as_text(record.get(field, ""))
         if is_disabled_image(image_path):
             if field == "商品图":
@@ -377,8 +330,8 @@ def add_required_field_precheck(record: dict[str, str], required_fields: set[str
         record["预检异常"] = append_issue(record.get("预检异常", ""), "字段为空:" + "、".join(sorted(missing)))
 
 
-def add_filename_precheck(record: dict[str, str]) -> None:
-    for field in REQUIRED_IMAGE_FIELDS:
+def add_filename_precheck(record: dict[str, str], image_fields: set[str] | None = None) -> None:
+    for field in image_fields or REQUIRED_IMAGE_FIELDS:
         image_name = image_basename(record.get(field, ""))
         if is_disabled_image(image_name):
             continue
@@ -405,6 +358,8 @@ def build_data(
     output_dir: Path,
     product_filter: set[str] | None,
     limit: int | None = None,
+    profile_id: str | None = None,
+    variant: str | None = None,
 ) -> tuple[int, int, Path, Path, Path]:
     workbook = load_workbook(workbook_path, read_only=False, data_only=False)
     values_workbook = load_workbook(workbook_path, read_only=False, data_only=True)
@@ -412,9 +367,25 @@ def build_data(
     ws_values = values_workbook[sheet_name]
     if ws.sheet_state != "visible" or ws.title == "WpsReserved_CellImgList":
         raise ValueError("不能处理隐藏 Sheet 或 WPS 内嵌图片索引 Sheet。")
+    profile = get_profile(profile_id, variant)
     layout = "vertical" if is_vertical_layout(ws) else "horizontal"
-    variables = source_variables(ws, layout)
-    required_fields = REQUIRED_RECORD_FIELDS if layout == "horizontal" else VERTICAL_REQUIRED_RECORD_FIELDS
+    if layout != profile["layout"]:
+        raise ProfileError("E_PROFILE_SCHEMA_MISMATCH", f"profile {profile['profile_id']} 不支持此 Sheet 布局")
+    variables = source_variables(ws, layout, profile)
+    if profile.get("execution_mode") == "photoshop_variables":
+        required_fields = {
+            variable["name"]
+            for variable in profile.get("required_psd_variables", [])
+            if variable.get("type") == "text"
+        }
+        required_image_fields = {
+            variable["name"]
+            for variable in profile.get("required_psd_variables", [])
+            if variable.get("type") == "pixel_replacement"
+        }
+    else:
+        required_fields = REQUIRED_RECORD_FIELDS if layout == "horizontal" else {"预估到手价", "卖点", "规格"}
+        required_image_fields = REQUIRED_IMAGE_FIELDS
     # Keep every selected product candidate, including records with preflight
     # issues.  The UI can later let the designer choose either the clean set or
     # the original-content set without reconstructing rows from an exception
@@ -422,11 +393,20 @@ def build_data(
     candidates: list[tuple[int, str, dict[str, str]]] = []
     exceptions: list[dict[str, str]] = []
     if layout == "vertical":
-        source_items = ((row, as_text(ws_values.cell(row, 1).value)) for row in range(2, ws.max_row + 1))
+        sku_header = profile.get("sheet", {}).get("sku_header")
+        sku_column = 1
+        if sku_header:
+            for column in range(1, ws.max_column + 1):
+                if as_text(ws.cell(1, column).value) == sku_header:
+                    sku_column = column
+                    break
+            else:
+                raise ProfileError("E_PROFILE_SCHEMA_MISMATCH", f"缺少 SKU 列：{sku_header}")
+        source_items = ((row, as_text(ws_values.cell(row, sku_column).value)) for row in range(2, ws.max_row + 1))
     else:
         source_items = ((column, as_text(ws_values.cell(1, column).value)) for column in range(2, ws.max_column + 1))
     for source_index, product in source_items:
-        raw_product = ws.cell(source_index, 1).value if layout == "vertical" else ws.cell(1, source_index).value
+        raw_product = ws.cell(source_index, sku_column).value if layout == "vertical" else ws.cell(1, source_index).value
         if is_blank(product) or is_display_image_formula(raw_product):
             continue
         if product_filter and product not in product_filter:
@@ -436,11 +416,14 @@ def build_data(
         else:
             record = row_from_column(ws, source_index, variables, ws_values)
         record["商品文件名"] = product
+        record["profile_id"] = profile["profile_id"]
+        record["profile_version"] = profile["profile_version"]
+        record["variant"] = profile["variant"]
         if has_newline(raw_product):
             record["预检异常"] = append_issue(record.get("预检异常", ""), "脏数据")
             exceptions.append(exception_record(record, product, source_index, "脏数据", "商品文件名包含换行符"))
-        add_filename_precheck(record)
-        add_material_precheck(record)
+        add_filename_precheck(record, required_image_fields)
+        add_material_precheck(record, required_image_fields)
         add_required_field_precheck(record, required_fields)
         if "脏数据" in record.get("预检异常", "") and not has_newline(raw_product):
             exceptions.append(exception_record(record, product, source_index, "脏数据", "任一单元格包含换行符"))
@@ -538,6 +521,8 @@ def main() -> None:
         help="仅导出指定商品文件名；可重复传入以选择多个商品。",
     )
     parser.add_argument("--limit", type=int, help="仅导出前 N 个去重后的商品，用于分批试跑。")
+    parser.add_argument("--profile", help="明确指定 channel profile；省略时使用 legacy-v1。")
+    parser.add_argument("--variant", help="明确指定 profile variant。")
     args = parser.parse_args()
     workbook_path, sheet_name, output_dir = choose_inputs(args)
     try:
@@ -547,6 +532,8 @@ def main() -> None:
             output_dir,
             set(args.product) if args.product else None,
             args.limit,
+            args.profile,
+            args.variant,
         )
     except (OSError, ValueError) as error:
         raise SystemExit(f"处理失败：{error}")

@@ -4,6 +4,8 @@
     [string]$OutputRoot,
     [string]$SheetName,
     [string]$ProductName,
+    [string]$Profile,
+    [string]$Variant,
     [int]$Limit,
     [switch]$NoUi
 )
@@ -42,6 +44,7 @@ $cleanScript = Join-Path $scriptDir 'clean_data.py'
 $sheetScript = Join-Path $scriptDir 'l0_list_sheets.py'
 $batchScript = Join-Path $scriptDir 'batch_template.jsx'
 $templatePrepareScript = Join-Path $scriptDir 'template_prepare.jsx'
+$channelProfilesPath = Join-Path $scriptDir 'channel_profiles.json'
 $runtimeRoot = Join-Path $scriptDir 'runtime'
 $privatePythonDir = Join-Path $runtimeRoot 'python'
 $privatePythonExe = Join-Path $privatePythonDir 'python.exe'
@@ -174,9 +177,11 @@ function ConvertTo-SafePathPart {
 function New-TaskOutputDirectory {
     param(
         [string]$OutputRoot,
-        [string]$SheetName
+        [string]$SheetName,
+        [string]$ProfileId,
+        [string]$Variant
     )
-    $baseName = '套版成品_{0}_{1}' -f (Get-Date).ToString('yyyy-MM-dd_HHmmss'), (ConvertTo-SafePathPart $SheetName)
+    $baseName = '套版成品_{0}_{1}_{2}_{3}' -f (Get-Date).ToString('yyyy-MM-dd_HHmmss'), (ConvertTo-SafePathPart $ProfileId), (ConvertTo-SafePathPart $Variant), (ConvertTo-SafePathPart $SheetName)
     $candidate = Join-Path $OutputRoot $baseName
     $suffix = 1
     while (Test-Path -LiteralPath $candidate) {
@@ -238,7 +243,12 @@ function Get-PhotoshopResultSummary {
     }
 
     $rows = @(Import-Csv -LiteralPath $ResultReport -Encoding UTF8)
-    $criticalCodes = @('E_TEMPLATE_INVALID', 'E_MISSING_IMAGE', 'E_PRICE_INVALID', 'E_EMPTY_FIELD')
+    $criticalCodes = @(
+        'E_TEMPLATE_INVALID', 'E_MISSING_IMAGE', 'E_PRICE_INVALID', 'E_EMPTY_FIELD',
+        'E_VAR_MISSING', 'E_VAR_UNBOUND', 'E_VAR_TYPE_MISMATCH',
+        'E_SIZE_MISMATCH', 'E_PROFILE_UNSUPPORTED', 'E_PROFILE_SCHEMA_MISMATCH',
+        'E_CONFIG_MISMATCH'
+    )
     $criticalRows = New-Object System.Collections.Generic.List[object]
     $failedRows = New-Object System.Collections.Generic.List[object]
     $reviewRows = New-Object System.Collections.Generic.List[object]
@@ -1595,7 +1605,7 @@ function Invoke-TemplatePreparationCheck {
     $script:OpenedDocument = $Application.Open($TemplatePath)
     try {
         $templateText = [System.IO.File]::ReadAllText($templatePrepareScript, [System.Text.Encoding]::UTF8)
-        $prefix = "`$.global.__TEMPLATE_PREP_INPUTS__ = { mode: '" + $Mode + "' };"
+        $prefix = "`$.global.__TEMPLATE_PREP_INPUTS__ = { mode: '" + $Mode + "', profile: " + $profileJson + " };"
         $scriptText = $prefix + "`r`n" + $templateText
         $rawResult = Invoke-PhotoshopJavaScript -Application $Application -ScriptText $scriptText
         $result = ConvertFrom-TemplatePreparationResult -RawResult $rawResult
@@ -1720,6 +1730,19 @@ try {
     Set-RunProgress -Stage '预检运行环境' -Detail '正在检查工具自带运行环境。首次修复运行环境时需要联网。'
     $python = Ensure-PythonRuntime
     $script:Settings = Read-UserSettings
+    if (-not (Test-Path -LiteralPath $channelProfilesPath -PathType Leaf)) { throw "E_PROFILE_UNSUPPORTED: 缺少 profile 配置：$channelProfilesPath" }
+    $profileDocument = Get-Content -LiteralPath $channelProfilesPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $profileId = if ([string]::IsNullOrWhiteSpace($Profile)) { 'legacy-v1' } else { $Profile }
+    $selectedProfile = @($profileDocument.profiles | Where-Object { $_.profile_id -eq $profileId }) | Select-Object -First 1
+    if (-not $selectedProfile) { throw "E_PROFILE_UNSUPPORTED: 不支持的 profile：$profileId" }
+    if ($selectedProfile.status -ne 'enabled') { throw "E_PROFILE_UNSUPPORTED: $($selectedProfile.approval_note)" }
+    $variantId = if ([string]::IsNullOrWhiteSpace($Variant)) { [string]$selectedProfile.default_variant } else { $Variant }
+    $selectedVariant = $selectedProfile.variants.$variantId
+    if (-not $selectedVariant) { throw "E_PROFILE_UNSUPPORTED: profile $profileId 不支持 variant：$variantId" }
+    $selectedProfile | Add-Member -NotePropertyName variant -NotePropertyValue $variantId -Force
+    $selectedProfile | Add-Member -NotePropertyName target_size -NotePropertyValue $selectedVariant -Force
+    $profileJson = $selectedProfile | ConvertTo-Json -Depth 8 -Compress
+    Add-Log "Profile：$profileId@$($selectedProfile.profile_version)，variant：$variantId，目标尺寸：$($selectedVariant.width)x$($selectedVariant.height)"
 
     if ($NoUi) {
         Set-RunProgress -Stage '校验命令行参数' -Detail '正在校验命令行传入的 Excel、PSD 和输出目录。'
@@ -1780,9 +1803,9 @@ try {
     }
 
     Set-RunProgress -Stage '建立任务文件夹' -Detail '正在创建本次任务的 JPG、PSD 和任务记录文件夹。'
-    $taskOutputDir = New-TaskOutputDirectory -OutputRoot $outputRoot -SheetName $sheetName
-    $jpgOutputDir = Join-Path $taskOutputDir 'JPG成品'
-    $psdOutputDir = Join-Path $taskOutputDir 'PSD源文件'
+    $taskOutputDir = New-TaskOutputDirectory -OutputRoot $outputRoot -SheetName $sheetName -ProfileId $profileId -Variant $variantId
+    $jpgOutputDir = Join-Path (Join-Path $taskOutputDir 'JPG成品') $variantId
+    $psdOutputDir = Join-Path (Join-Path $taskOutputDir 'PSD源文件') $variantId
     $taskRecordDir = Join-Path $taskOutputDir '任务记录'
     New-Item -Path $jpgOutputDir -ItemType Directory -Force | Out-Null
     New-Item -Path $psdOutputDir -ItemType Directory -Force | Out-Null
@@ -1854,6 +1877,8 @@ try {
         "商品表格：$excelPath",
         "PSD 模板：$psdPath",
         "数据工作表：$sheetName",
+        "Profile：$profileId@$($selectedProfile.profile_version)",
+        "Variant：$variantId（$($selectedVariant.width)x$($selectedVariant.height)）",
         "商品范围：$(if ($selectedProduct) { $selectedProduct } else { '全部商品' })",
         "JPG 成品：$jpgOutputDir",
         "PSD 源文件：$psdOutputDir",
@@ -1869,7 +1894,9 @@ try {
         $cleanScript,
         '--xlsx', $excelPath,
         '--sheet', $sheetName,
-        '--output-dir', $taskRecordDir
+        '--output-dir', $taskRecordDir,
+        '--profile', $profileId,
+        '--variant', $variantId
     )
     if (-not [string]::IsNullOrWhiteSpace($selectedProduct)) {
         foreach ($product in @($selectedProduct -split '\|' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
@@ -1961,6 +1988,7 @@ try {
         ('  output: {0},' -f (ConvertTo-JsStringLiteral $jpgOutputDir)),
         ('  psdOutput: {0},' -f (ConvertTo-JsStringLiteral $psdOutputDir)),
         ('  continueWithPreflightIssues: {0}' -f ($(if ($preflightMode -eq 'all_rows') { 'true' } else { 'false' }))),
+        ('  profile: {0}' -f $profileJson),
         '};'
     ) -join "`r`n"
     $jsxText = $prefix + "`r`n" + $batchText

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import csv
 import importlib.util
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -14,6 +14,7 @@ from openpyxl import Workbook
 
 ROOT = Path(__file__).resolve().parents[1]
 CLEAN_DATA_PATH = ROOT / "L0_Windows命令行版" / "_internal" / "clean_data.py"
+sys.path.insert(0, str(CLEAN_DATA_PATH.parent))
 SPEC = importlib.util.spec_from_file_location("l0_clean_data", CLEAN_DATA_PATH)
 assert SPEC and SPEC.loader
 clean_data = importlib.util.module_from_spec(SPEC)
@@ -21,7 +22,7 @@ SPEC.loader.exec_module(clean_data)
 
 
 class VerticalChannelCompatibilityTest(unittest.TestCase):
-    def test_positional_variables_and_image_formula_are_normalized(self) -> None:
+    def test_unapproved_vertical_profile_is_rejected_instead_of_guessed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             temporary_path = Path(temporary_directory)
             workbook_path = temporary_path / "channel.xlsx"
@@ -61,23 +62,8 @@ class VerticalChannelCompatibilityTest(unittest.TestCase):
             )
             workbook.save(workbook_path)
 
-            with patch.object(clean_data.os.path, "isfile", return_value=True):
-                count, errors, data_path, _, _ = clean_data.build_data(
-                    workbook_path, "渠道", output_directory, None
-                )
-
-            self.assertEqual((count, errors), (1, 0))
-            with data_path.open(encoding="utf-8-sig", newline="") as handle:
-                record = next(csv.DictReader(handle))
-            self.assertEqual(record["商品文件名"], "SKU-001")
-            self.assertEqual(record["折扣"], "限时直降")
-            self.assertEqual(record["券名"], "立减115元")
-            self.assertEqual(record["到手"], "到手价")
-            self.assertEqual(record["价格1"], "119")
-            self.assertEqual(record["价格2"], ".8")
-            self.assertEqual(record["规格"], "纸巾规格")
-            self.assertEqual(record["卖点"], "柔软亲肤")
-            self.assertEqual(record["商品图"], r"\\server\materials\SKU-001.png")
+            with self.assertRaisesRegex(ValueError, "E_PROFILE_SCHEMA_MISMATCH"):
+                clean_data.build_data(workbook_path, "渠道", output_directory, None)
 
 
 if __name__ == "__main__":
