@@ -563,17 +563,36 @@ function textMaxWidth(layer, key, originalRect) {
         adjacentBoundary = siblingLeftBoundary(layer, ["折"], originalRect);
     } else if (key === "价格1") {
         adjacentBoundary = siblingLeftBoundary(layer, ["@价格2"], originalRect);
+    } else if (key === "利益点1") {
+        // The two promotional benefits share one visual line. Keep the first
+        // value inside the space before the second value instead of allowing
+        // its point text to overlap when a longer offer is supplied.
+        adjacentBoundary = siblingLeftBoundary(layer, ["@利益点2"], originalRect);
     }
     if (adjacentBoundary !== null) {
-        maxWidth = Math.min(maxWidth, Math.max(1, adjacentBoundary - originalRect.left - 4));
+        var safetyGap = key === "利益点1" ? 20 : 4;
+        maxWidth = Math.min(maxWidth, Math.max(1, adjacentBoundary - originalRect.left - safetyGap));
     }
     return Math.max(1, maxWidth);
 }
 
-function fitTextToOriginalFrame(layer, key, originalRect) {
+function autoFitMinimumScale(key) {
+    if (!CHANNEL_PROFILE || !CHANNEL_PROFILE.text_fit || !CHANNEL_PROFILE.text_fit.keys) {
+        return null;
+    }
+    for (var index = 0; index < CHANNEL_PROFILE.text_fit.keys.length; index++) {
+        if (CHANNEL_PROFILE.text_fit.keys[index] === key) {
+            var scale = Number(CHANNEL_PROFILE.text_fit.minimum_scale);
+            return scale > 0 && scale <= 1 ? scale : 0.85;
+        }
+    }
+    return null;
+}
+
+function fitTextToOriginalFrame(layer, key, originalRect, minimumScale) {
     var maxWidth = textMaxWidth(layer, key, originalRect);
     var maxHeight = Math.max(1, rectHeight(originalRect) * 0.98);
-    var minimumSize = 6;
+    var appliedScale = 1;
     var fitted = false;
     for (var attempt = 0; attempt < 12; attempt++) {
         var currentRect = layerRect(layer);
@@ -590,17 +609,17 @@ function fitTextToOriginalFrame(layer, key, originalRect) {
         if (factor >= 0.999) {
             break;
         }
-        var currentSize;
-        try {
-            currentSize = layer.textItem.size.as("pt");
-        } catch (sizeError) {
+        if (minimumScale !== null && appliedScale * factor < minimumScale) {
+            factor = minimumScale / appliedScale;
+        }
+        if (factor >= 0.999) {
             break;
         }
-        var nextSize = Math.max(minimumSize, currentSize * factor);
-        if (nextSize >= currentSize - 0.01) {
-            break;
-        }
-        layer.textItem.size = UnitValue(nextSize, "pt");
+        // Some supplied PSD text layers have a designer-applied transform.
+        // Scaling the layer keeps that transform and its visual font size in
+        // sync, unlike assigning textItem.size directly.
+        layer.resize(factor * 100, factor * 100, AnchorPosition.TOPLEFT);
+        appliedScale *= factor;
     }
 
     // Preserve the template's visual anchor after a point-text resize.
@@ -632,10 +651,15 @@ function setTextLayer(layer, value, key, record, result) {
     }
     var originalRect = layerRect(layer);
     layer.textItem.contents = String(value);
-    // Keep the template's font, size, style and original anchor unchanged.
-    // Uneven automated shrinking made the same price/copy fields look wildly
-    // different between products. A long value is reported for design review
-    // instead of changing visual hierarchy during export.
+    var minimumScale = autoFitMinimumScale(key);
+    if (minimumScale !== null) {
+        var fitResult = fitTextToOriginalFrame(layer, key, originalRect, minimumScale);
+        if (fitResult.fitted) {
+            addIssue(result, "文案已自动缩字适配：" + key);
+        }
+    }
+    // Other text fields retain the PSD's original visual hierarchy. They are
+    // reported for design review instead of being resized automatically.
     var textRect = layerRect(layer);
     var maxWidth = textMaxWidth(layer, key, originalRect);
     var maxHeight = Math.max(1, rectHeight(originalRect) * 0.98);
