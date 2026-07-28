@@ -1804,8 +1804,15 @@ try {
 
     Set-RunProgress -Stage '建立任务文件夹' -Detail '正在创建本次任务的 JPG、PSD 和任务记录文件夹。'
     $taskOutputDir = New-TaskOutputDirectory -OutputRoot $outputRoot -SheetName $sheetName -ProfileId $profileId -Variant $variantId
-    $jpgOutputDir = Join-Path (Join-Path $taskOutputDir 'JPG成品') $variantId
-    $psdOutputDir = Join-Path (Join-Path $taskOutputDir 'PSD源文件') $variantId
+    # Keep v1.0 JD self-operated output paths unchanged. New approved profiles
+    # isolate each size below the normal JPG/PSD folders for independent retries.
+    if ($profileId -eq 'legacy-v1') {
+        $jpgOutputDir = Join-Path $taskOutputDir 'JPG成品'
+        $psdOutputDir = Join-Path $taskOutputDir 'PSD源文件'
+    } else {
+        $jpgOutputDir = Join-Path (Join-Path $taskOutputDir 'JPG成品') $variantId
+        $psdOutputDir = Join-Path (Join-Path $taskOutputDir 'PSD源文件') $variantId
+    }
     $taskRecordDir = Join-Path $taskOutputDir '任务记录'
     New-Item -Path $jpgOutputDir -ItemType Directory -Force | Out-Null
     New-Item -Path $psdOutputDir -ItemType Directory -Force | Out-Null
