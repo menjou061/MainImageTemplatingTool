@@ -64,6 +64,18 @@ function findNamedLayers(document, name) {
     return matches;
 }
 
+function findNamedLayersWithin(container, name) {
+    var all = [];
+    var matches = [];
+    descendants(container, all);
+    for (var index = 0; index < all.length; index++) {
+        if (all[index].name === name) {
+            matches.push(all[index]);
+        }
+    }
+    return matches;
+}
+
 function usesPhotoshopVariables() {
     return !!(CHANNEL_PROFILE && CHANNEL_PROFILE.execution_mode === "photoshop_variables");
 }
@@ -154,14 +166,30 @@ function hygieneProblems(document) {
     var expected = ["!商品图", "@卖点", "@备注", "@片数套", "@片数数量", "@到手标签", "@到手", "@价格活动价", "@价格活动价副标", "@价格优惠券", "@价格优惠券副标", "@价格立减", "@赠品文案1", "@赠品文案2", "@赠品文案3", "!赠品图1", "!赠品图2", "!赠品图3"];
     var expectedGroups = ["#赠品顶部", "#赠品区域"];
     var problems = [];
-    for (var index = 0; index < expected.length; index++) {
-        if (findNamedLayers(document, expected[index]).length === 0) {
-            problems.push("E_VAR_UNBOUND: " + expected[index]);
+    var configured = CHANNEL_PROFILE && CHANNEL_PROFILE.record_layout && CHANNEL_PROFILE.record_layout.groups;
+    for (var layoutIndex = 0; configured && layoutIndex < configured.length; layoutIndex++) {
+        var layoutMatches = findNamedLayers(document, configured[layoutIndex]);
+        if (layoutMatches.length !== 1 || layoutMatches[0].typename !== "LayerSet") {
+            problems.push("E_CONFIG_MISMATCH: 版式组 " + configured[layoutIndex] + " 缺失、重复或不是图层组");
+            continue;
+        }
+        var layout = layoutMatches[0];
+        for (var index = 0; index < expected.length; index++) {
+            if (findNamedLayersWithin(layout, expected[index]).length === 0) {
+                problems.push("E_VAR_UNBOUND: " + configured[layoutIndex] + "/" + expected[index]);
+            }
+        }
+        for (var groupIndex = 0; groupIndex < expectedGroups.length; groupIndex++) {
+            if (findNamedLayersWithin(layout, expectedGroups[groupIndex]).length === 0) {
+                problems.push("E_GROUP_UNBOUND: " + configured[layoutIndex] + "/" + expectedGroups[groupIndex]);
+            }
         }
     }
-    for (var groupIndex = 0; groupIndex < expectedGroups.length; groupIndex++) {
-        if (findNamedLayers(document, expectedGroups[groupIndex]).length === 0) {
-            problems.push("E_GROUP_UNBOUND: " + expectedGroups[groupIndex]);
+    if (!configured) {
+        for (var expectedIndex = 0; expectedIndex < expected.length; expectedIndex++) {
+            if (findNamedLayers(document, expected[expectedIndex]).length === 0) {
+                problems.push("E_VAR_UNBOUND: " + expected[expectedIndex]);
+            }
         }
     }
     var structureProblems = hygieneStructureProblems(document);
@@ -578,6 +606,7 @@ function prepareHygieneLayoutGroup(document, layoutGroup) {
                     giftGroups.push(giftAssets.layers[groupIndex]);
                 }
             }
+            sortLayersByVisualPosition(giftGroups);
             if (giftGroups.length > 0) {
                 normalizeGiftSlot(document, giftGroups[0], "赠品图2");
             }
