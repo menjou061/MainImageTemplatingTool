@@ -50,7 +50,29 @@ STANDARD_COLUMNS = [
     "价格2",
     "卖点",
     "规格",
+    "备注",
+    "片数套",
+    "片数数量",
+    "到手标签",
+    "价格活动价",
+    "价格活动价副标",
+    "价格优惠券",
+    "价格优惠券副标",
+    "价格立减",
+    "价格立减副标",
+    "赠品图1",
+    "赠品图2",
+    "赠品图3",
+    "赠品文案1",
+    "赠品文案2",
+    "赠品文案3",
+    "版式组",
     "预检异常",
+]
+
+RECORD_ROW_HEADERS = [
+    "活动", "系列", "主卖点", "备注", "时间", "堆品路径", "片数",
+    "主推数", "价格条", "赠品路径", "赠品文案", "代言IP路径",
 ]
 
 
@@ -109,7 +131,28 @@ def normalize_image_reference(value: str) -> str:
     that address avoids recursively scanning an entire shared drive just to
     locate one file, and makes the preflight result deterministic.
     """
-    return value
+    text = as_text(value)
+    if os.name == "nt" or not text.startswith("\\\\"):
+        return text
+    # Mac regression runs can use the already-mounted SMB share. Windows keeps
+    # the original UNC path so Photoshop receives the path from Excel.
+    marker = "\\个护设计中心\\"
+    if marker in text:
+        suffix = text.split(marker, 1)[1].replace("\\", "/")
+        mounted = "/Volumes/个护设计中心/" + suffix
+        if os.path.isfile(mounted):
+            return mounted
+    return text
+
+
+def material_exists(value: str) -> bool:
+    text = as_text(value)
+    if os.path.isfile(text):
+        return True
+    if text.startswith("\\\\") and "\\个护设计中心\\" in text:
+        suffix = text.split("\\个护设计中心\\", 1)[1].replace("\\", "/")
+        return os.path.isfile("/Volumes/个护设计中心/" + suffix)
+    return False
 
 
 def evaluate_concat_formula(formula: Any, ws_values, row: int, column: int) -> str:
@@ -306,6 +349,70 @@ def row_from_vertical(
     return row
 
 
+def split_price_bar(value: Any) -> dict[str, str]:
+    """Split the approved hygiene price formula into PSD text fields."""
+    text = as_text(value).replace("￥", "")
+    pattern = re.compile(
+        r"^\s*(?P<to_hand>[\d.]+)\s*[（(](?P<to_hand_label>[^）)]*)[）)]\s*="
+        r"\s*(?P<activity>[\d.]+)\s*[（(](?P<activity_label>[^）)]*)[）)]\s*"
+        r"-\s*(?P<coupon>[\d.]+)\s*[（(](?P<coupon_label>[^）)]*)[）)]\s*"
+        r"-\s*(?P<reduction>[\d.]+)\s*[（(](?P<reduction_label>[^）)]*)[）)]\s*$"
+    )
+    match = pattern.match(text)
+    if not match:
+        return {"价格条": text}
+    result = {"价格条": text}
+    result.update({
+        "到手": "¥" + match.group("to_hand"),
+        "到手标签": match.group("to_hand_label"),
+        "价格活动价": match.group("activity"),
+        "价格活动价副标": match.group("activity_label"),
+        "价格优惠券": match.group("coupon"),
+        "价格优惠券副标": match.group("coupon_label"),
+        "价格立减": match.group("reduction"),
+        "价格立减副标": match.group("reduction_label"),
+    })
+    return result
+
+
+def split_piece_count(value: Any) -> dict[str, str]:
+    text = as_text(value)
+    match = re.search(r"(?P<sets>\d+套)(?:含赠)?到手(?P<count>[\d.]+片)", text)
+    if match:
+        return {"片数套": match.group("sets") + "到手", "片数数量": match.group("count")}
+    return {"片数数量": text}
+
+
+def split_lines(value: Any, limit: int = 3) -> list[str]:
+    return [line.strip() for line in as_text(value).replace("\r", "").split("\n") if line.strip()][:limit]
+
+
+def row_from_record(ws, row_number: int, headers: list[str]) -> dict[str, str]:
+    values = {headers[index]: as_text(ws.cell(row_number, index + 1).value) for index in range(len(headers))}
+    record: dict[str, str] = {
+        "活动": values.get("活动", ""),
+        "系列": values.get("系列", ""),
+        "卖点": values.get("主卖点", "").strip(),
+        "备注": values.get("备注", "").strip(),
+        "活动时间": values.get("时间", ""),
+        "商品图": normalize_image_reference(values.get("堆品路径", "")),
+        "主推数": values.get("主推数", ""),
+        "代言IP路径": normalize_image_reference(values.get("代言IP路径", "")),
+    }
+    record["代言IP"] = record["代言IP路径"]
+    record.update(split_piece_count(values.get("片数", "")))
+    record.update(split_price_bar(values.get("价格条", "")))
+    gift_paths = split_lines(values.get("赠品路径", ""))
+    gift_copy = split_lines(values.get("赠品文案", ""))
+    for index in range(3):
+        record[f"赠品图{index + 1}"] = normalize_image_reference(gift_paths[index]) if index < len(gift_paths) else ""
+        record[f"赠品文案{index + 1}"] = gift_copy[index] if index < len(gift_copy) else ""
+    # Activity and series are intentionally metadata only. The layout selector
+    # follows the approved path rule and is recorded for the PSD task report.
+    record["版式组"] = "小马无侧边" if "(IP)" in record.get("商品图", "") or "（IP）" in record.get("商品图", "") else "无代言人"
+    return record
+
+
 def append_issue(existing: str, issue: str) -> str:
     return issue if not existing else existing + ";" + issue
 
@@ -325,7 +432,7 @@ def add_material_precheck(record: dict[str, str], image_fields: set[str] | None 
         if not is_absolute_material_path(image_path):
             record["预检异常"] = append_issue(record.get("预检异常", ""), f"素材地址缺失:{field}")
             continue
-        if not os.path.isfile(image_path):
+        if not material_exists(image_path):
             record["预检异常"] = append_issue(record.get("预检异常", ""), f"缺图:{field}")
 
 
@@ -358,6 +465,79 @@ def write_csv(path: Path, fieldnames: list[str], records: list[dict[str, str]]) 
         writer.writerows(records)
 
 
+def build_record_rows(
+    ws,
+    output_dir: Path,
+    product_filter: set[str] | None,
+    limit: int | None,
+    profile: dict[str, Any],
+) -> tuple[int, int, Path, Path, Path]:
+    headers = [as_text(ws.cell(1, column).value) for column in range(1, ws.max_column + 1)]
+    required_headers = set(RECORD_ROW_HEADERS)
+    missing = sorted(required_headers - set(headers))
+    if missing:
+        raise ProfileError("E_PROFILE_SCHEMA_MISMATCH", "缺少列：" + "、".join(missing))
+    required_fields = {"活动时间", "卖点", "片数套", "片数数量", "到手", "价格活动价", "价格优惠券", "价格立减"}
+    records: list[dict[str, str]] = []
+    exceptions: list[dict[str, str]] = []
+    for row_number in range(2, ws.max_row + 1):
+        if all(is_blank(ws.cell(row_number, column).value) for column in range(1, len(headers) + 1)):
+            continue
+        record = row_from_record(ws, row_number, headers)
+        activity = record.get("活动", "") or "未命名活动"
+        series = record.get("系列", "") or "未命名系列"
+        product = f"{activity}_{series}_{row_number - 1:02d}"
+        record["商品文件名"] = product
+        record["profile_id"] = profile["profile_id"]
+        record["profile_version"] = profile["profile_version"]
+        record["variant"] = profile["variant"]
+        record["预检异常"] = ""
+        if product_filter and product not in product_filter:
+            continue
+        if is_blank(record.get("商品图")):
+            record["预检异常"] = append_issue(record.get("预检异常", ""), "素材地址缺失:商品图")
+        elif not material_exists(record["商品图"]):
+            record["预检异常"] = append_issue(record.get("预检异常", ""), "缺图:商品图")
+        for index in range(1, 4):
+            gift_path = record.get(f"赠品图{index}", "")
+            if gift_path and not material_exists(gift_path):
+                record["预检异常"] = append_issue(record.get("预检异常", ""), f"缺图:赠品图{index}")
+        missing_fields = [field for field in sorted(required_fields) if is_blank(record.get(field, ""))]
+        if missing_fields:
+            record["预检异常"] = append_issue(record.get("预检异常", ""), "字段为空:" + "、".join(missing_fields))
+        if record.get("备注") and not record["备注"].startswith("*"):
+            record["预检异常"] = append_issue(record.get("预检异常", ""), "备注建议以*开头")
+        if record.get("预检异常"):
+            exceptions.append(exception_record(record, product, row_number, "数据预检不通过", record["预检异常"]))
+        records.append(record)
+    if limit is not None:
+        if limit < 1:
+            raise ValueError("--limit 必须是大于 0 的整数。")
+        records = records[:limit]
+    clean_records = [record for record in records if not record.get("预检异常")]
+    all_records = records
+    seen_columns = set(STANDARD_COLUMNS)
+    discovered_columns: list[str] = []
+    for record in all_records + exceptions:
+        for key in record:
+            if key not in seen_columns and key not in {"源列", "异常类型", "异常详情"}:
+                seen_columns.add(key)
+                discovered_columns.append(key)
+    data_columns = STANDARD_COLUMNS + discovered_columns
+    for record in all_records:
+        for column in data_columns:
+            record.setdefault(column, "")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    data_path = output_dir / "data.csv"
+    all_data_path = output_dir / "data_全部记录.csv"
+    error_path = output_dir / "异常记录.csv"
+    write_csv(data_path, data_columns, clean_records)
+    write_csv(all_data_path, data_columns, all_records)
+    error_columns = ["商品文件名", "源列", "异常类型", "异常详情"] + [column for column in data_columns if column != "商品文件名"]
+    write_csv(error_path, error_columns, exceptions)
+    return len(clean_records), len(exceptions), data_path, all_data_path, error_path
+
+
 def build_data(
     workbook_path: Path,
     sheet_name: str,
@@ -375,6 +555,8 @@ def build_data(
         raise ValueError("不能处理隐藏 Sheet 或 WPS 内嵌图片索引 Sheet。")
     profile = get_profile(profile_id, variant)
     layout = "vertical" if is_vertical_layout(ws) else "horizontal"
+    if profile.get("layout") == "record_rows":
+        return build_record_rows(ws, output_dir, product_filter, limit, profile)
     if layout != profile["layout"]:
         raise ProfileError("E_PROFILE_SCHEMA_MISMATCH", f"profile {profile['profile_id']} 不支持此 Sheet 布局")
     variables = source_variables(ws, layout, profile)

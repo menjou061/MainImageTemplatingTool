@@ -54,6 +54,15 @@ class ChannelProfileTest(unittest.TestCase):
         with self.assertRaisesRegex(ProfileError, "E_PROFILE_UNSUPPORTED"):
             get_profile("jd-main-800-v1")
 
+    def test_hygiene_tmall_profile_uses_the_record_row_contract(self) -> None:
+        profile = get_profile("hygiene-tmall-v1.2")
+        self.assertEqual(profile["layout"], "record_rows")
+        self.assertEqual(profile["target_size"], {"width": 750, "height": 1000})
+        self.assertEqual(profile["category"], "卫品")
+        self.assertEqual(profile["channel"], "天猫官旗")
+        self.assertIn("备注", profile["sheet"]["required_headers"])
+        self.assertIn("小马无侧边", profile["record_layout"]["groups"])
+
 
 if __name__ == "__main__":
     unittest.main()

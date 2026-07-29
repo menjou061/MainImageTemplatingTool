@@ -748,6 +748,105 @@ function Select-ProductTask {
     return $null
 }
 
+function Select-ChannelProfile {
+    param([object[]]$Profiles)
+    $available = @($Profiles | Where-Object {
+        $_.status -eq 'enabled' -and -not [string]::IsNullOrWhiteSpace([string]$_.category) -and -not [string]::IsNullOrWhiteSpace([string]$_.channel)
+    })
+    if ($available.Count -eq 0) { return $null }
+
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = '选择品类和渠道'
+    $form.StartPosition = 'CenterScreen'
+    $form.Size = New-Object System.Drawing.Size(520, 280)
+    $form.MinimizeBox = $false
+    $form.MaximizeBox = $false
+    $form.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
+
+    $title = New-Object System.Windows.Forms.Label
+    $title.Text = '请选择本次主图任务对应的品类和渠道'
+    $title.AutoSize = $true
+    $title.Location = New-Object System.Drawing.Point(18, 18)
+    $form.Controls.Add($title)
+
+    $categoryLabel = New-Object System.Windows.Forms.Label
+    $categoryLabel.Text = '品类'
+    $categoryLabel.AutoSize = $true
+    $categoryLabel.Location = New-Object System.Drawing.Point(18, 65)
+    $form.Controls.Add($categoryLabel)
+
+    $categoryCombo = New-Object System.Windows.Forms.ComboBox
+    $categoryCombo.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
+    $categoryCombo.Location = New-Object System.Drawing.Point(92, 61)
+    $categoryCombo.Size = New-Object System.Drawing.Size(360, 26)
+    @($available | ForEach-Object { [string]$_.category } | Select-Object -Unique) | ForEach-Object { [void]$categoryCombo.Items.Add($_) }
+    $form.Controls.Add($categoryCombo)
+
+    $channelLabel = New-Object System.Windows.Forms.Label
+    $channelLabel.Text = '渠道'
+    $channelLabel.AutoSize = $true
+    $channelLabel.Location = New-Object System.Drawing.Point(18, 108)
+    $form.Controls.Add($channelLabel)
+
+    $channelCombo = New-Object System.Windows.Forms.ComboBox
+    $channelCombo.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
+    $channelCombo.Location = New-Object System.Drawing.Point(92, 104)
+    $channelCombo.Size = New-Object System.Drawing.Size(360, 26)
+    $form.Controls.Add($channelCombo)
+
+    $version = New-Object System.Windows.Forms.Label
+    $version.AutoSize = $true
+    $version.ForeColor = [System.Drawing.Color]::DimGray
+    $version.Location = New-Object System.Drawing.Point(92, 142)
+    $form.Controls.Add($version)
+
+    $refreshChannels = {
+        $channelCombo.Items.Clear()
+        $category = [string]$categoryCombo.SelectedItem
+        @($available | Where-Object { $_.category -eq $category } | ForEach-Object { [string]$_.channel } | Select-Object -Unique) | ForEach-Object {
+            [void]$channelCombo.Items.Add($_)
+        }
+        if ($channelCombo.Items.Count -gt 0) { $channelCombo.SelectedIndex = 0 }
+    }
+    $refreshVersion = {
+        $selected = @($available | Where-Object {
+            $_.category -eq [string]$categoryCombo.SelectedItem -and $_.channel -eq [string]$channelCombo.SelectedItem
+        }) | Select-Object -First 1
+        if ($selected) {
+            $version.Text = "当前生效版本：$($selected.profile_version)"
+            $form.Tag = [string]$selected.profile_id
+        }
+    }
+    $categoryCombo.Add_SelectedIndexChanged({ & $refreshChannels })
+    $channelCombo.Add_SelectedIndexChanged({ & $refreshVersion })
+
+    $okButton = New-Object System.Windows.Forms.Button
+    $okButton.Text = '下一步'
+    $okButton.Location = New-Object System.Drawing.Point(275, 185)
+    $okButton.Size = New-Object System.Drawing.Size(86, 30)
+    $okButton.Add_Click({
+        if ($form.Tag) {
+            $form.DialogResult = [System.Windows.Forms.DialogResult]::OK
+            $form.Close()
+        }
+    })
+    $form.Controls.Add($okButton)
+    $form.AcceptButton = $okButton
+
+    $cancelButton = New-Object System.Windows.Forms.Button
+    $cancelButton.Text = '取消'
+    $cancelButton.Location = New-Object System.Drawing.Point(370, 185)
+    $cancelButton.Size = New-Object System.Drawing.Size(82, 30)
+    $cancelButton.Add_Click({ $form.DialogResult = [System.Windows.Forms.DialogResult]::Cancel; $form.Close() })
+    $form.Controls.Add($cancelButton)
+    $form.CancelButton = $cancelButton
+
+    $preferred = @($available | Where-Object { $_.category -eq '卫品' -and $_.channel -eq '天猫官旗' }) | Select-Object -First 1
+    $categoryCombo.SelectedItem = if ($preferred) { [string]$preferred.category } else { $categoryCombo.Items[0] }
+    if ($form.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { return [string]$form.Tag }
+    return $null
+}
+
 function Move-FormIntoVisibleWorkingArea {
     param([object]$Form)
     if (-not $Form) { return }
@@ -776,7 +875,7 @@ function Select-TaskSettings {
     )
 
     $form = New-Object System.Windows.Forms.Form
-    $form.Text = '电商主图套版工具 1.1'
+    $form.Text = '电商主图套版工具 1.2'
     $form.StartPosition = 'CenterScreen'
     $form.Size = New-Object System.Drawing.Size(860, 650)
     $form.MinimumSize = New-Object System.Drawing.Size(860, 650)
@@ -1832,7 +1931,18 @@ try {
     $script:Settings = Read-UserSettings
     if (-not (Test-Path -LiteralPath $channelProfilesPath -PathType Leaf)) { throw "E_PROFILE_UNSUPPORTED: 缺少 profile 配置：$channelProfilesPath" }
     $profileDocument = Get-Content -LiteralPath $channelProfilesPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    $profileId = if ([string]::IsNullOrWhiteSpace($Profile)) { 'legacy-v1' } else { $Profile }
+    $profileId = $Profile
+    if ([string]::IsNullOrWhiteSpace($profileId)) {
+        if ($NoUi) {
+            $profileId = 'legacy-v1'
+        } else {
+            $profileId = Select-ChannelProfile -Profiles @($profileDocument.profiles)
+            if ([string]::IsNullOrWhiteSpace($profileId)) {
+                Write-EntryStatus -Status 'cancelled' -Message '用户取消了品类渠道选择。'
+                exit 0
+            }
+        }
+    }
     $selectedProfile = @($profileDocument.profiles | Where-Object { $_.profile_id -eq $profileId }) | Select-Object -First 1
     if (-not $selectedProfile) { throw "E_PROFILE_UNSUPPORTED: 不支持的 profile：$profileId" }
     if ($selectedProfile.status -ne 'enabled') { throw "E_PROFILE_UNSUPPORTED: $($selectedProfile.approval_note)" }
