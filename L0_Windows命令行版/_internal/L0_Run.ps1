@@ -766,6 +766,7 @@ function Move-FormIntoVisibleWorkingArea {
 function Select-TaskSettings {
     param(
         [object]$Python,
+        [object]$ProfileConfig,
         [string]$InitialExcelPath,
         [string]$InitialPsdPath,
         [string]$InitialPsd750Path,
@@ -1007,7 +1008,17 @@ function Select-TaskSettings {
             }
         }
         $productList.Enabled = ($singleProductRadio.Checked -and $singleProductRadio.Enabled)
-        $statusLabel.Text = "表格读取完成：$($productList.Items.Count) 个商品。默认生成全部商品。"
+        $variantHint = ''
+        if ($ProfileConfig -and $sheetCombo.SelectedItem) {
+            try {
+                $previewVariantId = Get-VariantForSheet -ProfileConfig $ProfileConfig -SheetName ([string]$sheetCombo.SelectedItem)
+                $previewVariant = $ProfileConfig.variants.$previewVariantId
+                $variantHint = " 当前规格：$previewVariantId（$($previewVariant.width)x$($previewVariant.height)）。"
+            } catch {
+                $variantHint = " 规格匹配失败：$($_.Exception.Message)"
+            }
+        }
+        $statusLabel.Text = "表格读取完成：$($productList.Items.Count) 个商品。默认生成全部商品。$variantHint"
         return $true
     }
 
@@ -1149,10 +1160,6 @@ function Select-TaskSettings {
             $statusLabel.Text = '请重新选择可访问的 PSD 模板。'
             return
         }
-        if ($IsBatchChannelTask -and -not (Test-Path -LiteralPath $candidatePsd750 -PathType Leaf)) {
-            $statusLabel.Text = '请重新选择可访问的 750 PSD 模板。'
-            return
-        }
         if ([string]::IsNullOrWhiteSpace($candidateOutput)) {
             $candidateOutput = Get-DefaultOutputRoot
             $outputBox.Text = $candidateOutput
@@ -1181,7 +1188,7 @@ function Select-TaskSettings {
             PsdPath = $candidatePsd
             Psd750Path = $candidatePsd750
             OutputRoot = $candidateOutput
-            SheetName = if ($IsBatchChannelTask) { '' } else { [string]$sheetCombo.SelectedItem }
+            SheetName = [string]$sheetCombo.SelectedItem
             ProductName = $candidateProduct
         }
         $form.DialogResult = [System.Windows.Forms.DialogResult]::OK
@@ -1193,9 +1200,7 @@ function Select-TaskSettings {
         $form.Close()
     })
 
-    if ($IsBatchChannelTask) {
-        $statusLabel.Text = '天猫官旗会自动处理【现货-800】和【现货-750】两个工作表的全部商品。'
-    } elseif (-not [string]::IsNullOrWhiteSpace($InitialExcelPath) -and (Test-Path -LiteralPath $InitialExcelPath -PathType Leaf)) {
+    if (-not [string]::IsNullOrWhiteSpace($InitialExcelPath) -and (Test-Path -LiteralPath $InitialExcelPath -PathType Leaf)) {
         [void](& $loadSheets $InitialSheetName $InitialProductName)
     } elseif (-not [string]::IsNullOrWhiteSpace($InitialExcelPath)) {
         $statusLabel.Text = "上次 Excel 不存在或不可访问，请重新选择：$InitialExcelPath"
@@ -1765,53 +1770,22 @@ function ConvertTo-ProcessArgument {
     return '"' + ([string]$Value).Replace('"', '""') + '"'
 }
 
-function Invoke-ConfiguredBatchVariants {
+function Get-VariantForSheet {
     param(
         [object]$ProfileConfig,
-        [string]$Excel,
-        [string]$Psd800,
-        [string]$Psd750,
-        [string]$Output,
-        [int]$RowLimit
+        [string]$SheetName
     )
-    $variantPsdPaths = @{ 'main-800' = $Psd800; 'main-750' = $Psd750 }
-    $results = @()
-    $dispatchLogDir = Join-Path $Output '任务调度记录'
-    New-Item -Path $dispatchLogDir -ItemType Directory -Force | Out-Null
-    foreach ($childVariant in @($ProfileConfig.batch_variants)) {
-        $childConfig = $ProfileConfig.variants.$childVariant
-        $childPsd = $variantPsdPaths[$childVariant]
-        if (-not $childConfig -or [string]::IsNullOrWhiteSpace($childConfig.sheet_name) -or [string]::IsNullOrWhiteSpace($childPsd)) {
-            $results += [pscustomobject]@{ Variant = $childVariant; ExitCode = 1; Message = '渠道配置缺少工作表或 PSD 模板。' }
-            continue
-        }
-        $childArguments = @(
-            '-NoLogo', '-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass',
-            '-File', (ConvertTo-ProcessArgument $PSCommandPath),
-            '-NoUi',
-            '-ExcelPath', (ConvertTo-ProcessArgument $Excel),
-            '-PsdPath', (ConvertTo-ProcessArgument $childPsd),
-            '-OutputRoot', (ConvertTo-ProcessArgument $Output),
-            '-SheetName', (ConvertTo-ProcessArgument ([string]$childConfig.sheet_name)),
-            '-ProductName', '"*"',
-            '-Profile', (ConvertTo-ProcessArgument ([string]$ProfileConfig.profile_id)),
-            '-Variant', (ConvertTo-ProcessArgument ([string]$childVariant))
-        )
-        if ($RowLimit -gt 0) {
-            $childArguments += @('-Limit', [string]$RowLimit)
-        }
-        Add-Log "开始处理 $childVariant：工作表 $($childConfig.sheet_name)，PSD $childPsd"
-        $childStdout = Join-Path $dispatchLogDir ("{0}.stdout.log" -f $childVariant)
-        $childStderr = Join-Path $dispatchLogDir ("{0}.stderr.log" -f $childVariant)
-        $process = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList ($childArguments -join ' ') -RedirectStandardOutput $childStdout -RedirectStandardError $childStderr -Wait -PassThru
-        $message = if ($process.ExitCode -eq 0) { '完成' } else {
-            $rawDetail = if (Test-Path -LiteralPath $childStderr) { Get-Content -LiteralPath $childStderr -Raw } else { '' }
-            $detail = if ($null -eq $rawDetail) { '' } else { ([string]$rawDetail).Trim() }
-            if ([string]::IsNullOrWhiteSpace($detail)) { '失败，详情请查看该规格任务文件夹中的任务记录。' } else { "失败：$detail" }
-        }
-        $results += [pscustomobject]@{ Variant = $childVariant; ExitCode = $process.ExitCode; Message = $message }
+    $namedVariants = @($ProfileConfig.variants.PSObject.Properties | Where-Object {
+        $_.Value -and -not [string]::IsNullOrWhiteSpace([string]$_.Value.sheet_name)
+    })
+    if ($namedVariants.Count -eq 0) {
+        return [string]$ProfileConfig.default_variant
     }
-    return @($results)
+    $matches = @($namedVariants | Where-Object { [string]$_.Value.sheet_name -eq $SheetName })
+    if ($matches.Count -ne 1) {
+        throw "E_PROFILE_SHEET_MISMATCH：Sheet '$SheetName' 未匹配到唯一的模板规格，请选择已配置的运营 Sheet。"
+    }
+    return [string]$matches[0].Name
 }
 
 try {
@@ -1836,7 +1810,9 @@ try {
     $selectedProfile = @($profileDocument.profiles | Where-Object { $_.profile_id -eq $profileId }) | Select-Object -First 1
     if (-not $selectedProfile) { throw "E_PROFILE_UNSUPPORTED: 不支持的 profile：$profileId" }
     if ($selectedProfile.status -ne 'enabled') { throw "E_PROFILE_UNSUPPORTED: $($selectedProfile.approval_note)" }
-    $isBatchChannelTask = [string]::IsNullOrWhiteSpace($Variant) -and $selectedProfile.batch_variants -and @($selectedProfile.batch_variants).Count -gt 1
+    # A legacy parameter is kept for older shortcuts, but every run is now one
+    # selected Sheet/variant task.  750 and 800 are never dispatched together.
+    $isBatchChannelTask = $false
     $variantId = if ([string]::IsNullOrWhiteSpace($Variant)) { [string]$selectedProfile.default_variant } else { $Variant }
     $selectedVariant = $selectedProfile.variants.$variantId
     if (-not $selectedVariant) { throw "E_PROFILE_UNSUPPORTED: profile $profileId 不支持 variant：$variantId" }
@@ -1862,13 +1838,6 @@ try {
         if (-not (Test-Path -LiteralPath $PsdPath -PathType Leaf)) { throw "PSD 模板不存在：$PsdPath" }
         $psdPath = $PsdPath
         Add-Log "命令行指定 PSD：$psdPath"
-        if ($isBatchChannelTask) {
-            if ([string]::IsNullOrWhiteSpace($Psd750Path)) { throw '天猫官旗批量任务缺少 -Psd750Path。' }
-            if (-not (Test-Path -LiteralPath $Psd750Path -PathType Leaf)) { throw "750 PSD 模板不存在：$Psd750Path" }
-            $psd750Path = $Psd750Path
-            Add-Log "命令行指定 750 PSD：$psd750Path"
-        }
-
         if ([string]::IsNullOrWhiteSpace($OutputRoot)) { throw '命令行模式缺少 -OutputRoot。' }
         $outputRoot = $OutputRoot
         $sheetName = $SheetName
@@ -1884,7 +1853,7 @@ try {
         if ([string]::IsNullOrWhiteSpace($initialOutputRoot)) { $initialOutputRoot = Get-DefaultOutputRoot }
         $initialSheetName = if (-not [string]::IsNullOrWhiteSpace($SheetName)) { $SheetName } else { Get-SettingText -Settings $script:Settings -Name 'sheetName' }
         $initialProductName = if (-not [string]::IsNullOrWhiteSpace($ProductName)) { $ProductName } else { Get-SettingText -Settings $script:Settings -Name 'productName' }
-        $taskSettings = Select-TaskSettings -Python $python -InitialExcelPath $initialExcelPath -InitialPsdPath $initialPsdPath -InitialPsd750Path $initialPsd750Path -InitialOutputRoot $initialOutputRoot -InitialSheetName $initialSheetName -InitialProductName $initialProductName -IsBatchChannelTask $isBatchChannelTask
+        $taskSettings = Select-TaskSettings -Python $python -ProfileConfig $selectedProfile -InitialExcelPath $initialExcelPath -InitialPsdPath $initialPsdPath -InitialPsd750Path $initialPsd750Path -InitialOutputRoot $initialOutputRoot -InitialSheetName $initialSheetName -InitialProductName $initialProductName -IsBatchChannelTask $false
         if (-not $taskSettings) {
             Write-EntryStatus -Status 'cancelled' -Message '用户取消了本次任务。'
             Write-TaskHistory -Status '已取消' -Message '用户在任务设置窗口取消。'
@@ -1898,27 +1867,24 @@ try {
         $selectedProduct = $taskSettings.ProductName
         Add-Log "窗口确认 Excel：$excelPath"
         Add-Log "窗口确认 PSD：$psdPath"
-        if ($isBatchChannelTask) { Add-Log "窗口确认 750 PSD：$psd750Path" }
         Add-Log "窗口确认输出目录：$outputRoot"
         Add-Log "窗口确认 Sheet：$sheetName"
         Add-Log "窗口确认商品任务：$(if ($selectedProduct) { $selectedProduct } else { '全部商品' })"
     }
 
-    if ($isBatchChannelTask) {
-        $script:Stage = '天猫官旗双规格处理'
-        Save-UserSettings -ExcelPath $excelPath -PsdPath $psdPath -Psd750Path $psd750Path -OutputRoot $outputRoot -SheetName '' -ProductName ''
-        $batchResults = Invoke-ConfiguredBatchVariants -ProfileConfig $selectedProfile -Excel $excelPath -Psd800 $psdPath -Psd750 $psd750Path -Output $outputRoot -RowLimit $Limit
-        $batchSummary = ($batchResults | ForEach-Object { "$($_.Variant)：$($_.Message)" }) -join "`r`n"
-        $failedVariants = @($batchResults | Where-Object { $_.ExitCode -ne 0 })
-        Write-TaskHistory -Status $(if ($failedVariants.Count -gt 0) { '部分失败' } else { '已完成' }) -Message "天猫官旗双规格：$($batchSummary -replace "`r`n", '；')"
-        if ($failedVariants.Count -gt 0) {
-            Write-EntryFailureReport -ErrorSummary "天猫官旗双规格任务未全部完成：$batchSummary" -Suggestion '每个规格均已独立执行；请查看失败规格任务文件夹中的任务记录。'
-            if (-not $NoUi) { Show-TaskCompletionDialog -Title '套版处理完成，部分规格失败' -Message $batchSummary -JpgOutputDir $outputRoot }
-            exit 1
-        }
-        Write-EntryStatus -Status 'success' -Message "天猫官旗双规格处理完成。$batchSummary"
-        if (-not $NoUi) { Show-TaskCompletionDialog -Title '天猫官旗套版已完成' -Message $batchSummary -JpgOutputDir $outputRoot }
-        exit 0
+    if ([string]::IsNullOrWhiteSpace($sheetName)) {
+        throw 'E_PROFILE_SHEET_MISMATCH：未选择数据工作表。'
+    }
+    if ([string]::IsNullOrWhiteSpace($Variant) -and $selectedProfile.variant_selection -eq 'sheet') {
+        $variantId = Get-VariantForSheet -ProfileConfig $selectedProfile -SheetName $sheetName
+        $selectedVariant = $selectedProfile.variants.$variantId
+        if (-not $selectedVariant) { throw "E_PROFILE_UNSUPPORTED: profile $profileId 不支持 variant：$variantId" }
+        $selectedProfile | Add-Member -NotePropertyName variant -NotePropertyValue $variantId -Force
+        $selectedProfile | Add-Member -NotePropertyName target_size -NotePropertyValue ([pscustomobject]@{ width = $selectedVariant.width; height = $selectedVariant.height }) -Force
+        if ($selectedVariant.export_size) { $selectedProfile | Add-Member -NotePropertyName export_size -NotePropertyValue $selectedVariant.export_size -Force }
+        if ($selectedVariant.template_bindings) { $selectedProfile | Add-Member -NotePropertyName template_bindings -NotePropertyValue $selectedVariant.template_bindings -Force }
+        $profileJson = $selectedProfile | ConvertTo-Json -Depth 8 -Compress
+        Add-Log "按 Sheet 匹配规格：$sheetName -> $variantId（$($selectedVariant.width)x$($selectedVariant.height)）"
     }
 
     $script:CurrentExcelPath = $excelPath

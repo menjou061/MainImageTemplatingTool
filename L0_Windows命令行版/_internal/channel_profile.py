@@ -11,6 +11,25 @@ class ProfileError(ValueError):
         super().__init__(f"{code}: {message}")
         self.code = code
 
+
+def get_variant_for_sheet(profile: dict[str, Any], sheet_name: str) -> str:
+    """Resolve the single output variant selected by a visible Excel sheet."""
+    variants = profile.get("variants", {})
+    named = {
+        variant_id: config.get("sheet_name")
+        for variant_id, config in variants.items()
+        if config.get("sheet_name")
+    }
+    if not named:
+        return str(profile.get("default_variant") or "")
+    matches = [variant_id for variant_id, configured_sheet in named.items() if configured_sheet == sheet_name]
+    if len(matches) != 1:
+        raise ProfileError(
+            "E_PROFILE_SHEET_MISMATCH",
+            f"Sheet {sheet_name!r} 未匹配到唯一的模板规格。请使用渠道配置中的运营 Sheet。",
+        )
+    return matches[0]
+
 def load_profiles() -> dict[str, dict[str, Any]]:
     with PROFILE_PATH.open(encoding="utf-8") as handle:
         document = json.load(handle)
