@@ -17,6 +17,7 @@ class HygieneTemplatePreparationTest(unittest.TestCase):
         self.assertIn('"@赠品文案" + (copyIndex + 2)', source)
         self.assertIn('normalizeGiftSlot(document, giftGroups[0], "赠品图2")', source)
         self.assertIn('normalizeGiftSlot(document, giftGroups[1], "赠品图3")', source)
+        self.assertIn("sortLayersByVisualPosition(giftGroups)", source)
 
     def test_fixed_gift_button_and_disclaimer_are_not_bound_to_row_data(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
@@ -32,6 +33,12 @@ class HygieneTemplatePreparationTest(unittest.TestCase):
         helper = source[start:end]
         self.assertIn("convertToSmartObject(document, slotGroup, targetName)", helper)
         self.assertNotIn("renameGiftImage(document, sourceObjects", helper)
+
+    def test_every_layout_must_keep_all_dynamic_bindings(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn("findNamedLayersWithin(layout, expected[index])", source)
+        self.assertIn('problems.push("E_VAR_UNBOUND: " + configured[layoutIndex] + "/" + expected[index])', source)
 
 
 if __name__ == "__main__":

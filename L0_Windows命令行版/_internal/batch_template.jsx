@@ -422,23 +422,63 @@ function profileBindingErrors(template, profile) {
         }
         return variableErrors;
     }
+    if (profile.layout === "record_rows") {
+        return recordLayoutBindingErrors(template, profile);
+    }
+    return requiredBindingErrors(template, profile, "");
+}
+
+function requiredBindingErrors(container, profile, scope) {
     var layerIndex = { text: {}, image: {}, switches: {} };
-    addLayers(template, layerIndex);
+    addLayers(container, layerIndex);
     var errors = [];
     for (var index = 0; index < profile.required_psd_variables.length; index++) {
         var required = profile.required_psd_variables[index];
         var collection = required.type === "text" ? layerIndex.text : layerIndex.image;
         if (!collection[required.name] || collection[required.name].length === 0) {
-            errors.push("E_VAR_UNBOUND: " + required.name + " 未绑定到 " + (required.type === "text" ? "@文本层" : "!智能对象"));
+            errors.push("E_VAR_UNBOUND: " + scope + required.name + " 未绑定到 " + (required.type === "text" ? "@文本层" : "!智能对象"));
             continue;
         }
         for (var layerIndexValue = 0; layerIndexValue < collection[required.name].length; layerIndexValue++) {
             var layer = collection[required.name][layerIndexValue];
             if ((required.type === "text" && layer.kind !== LayerKind.TEXT) ||
                 (required.type === "smart_object" && layer.kind !== LayerKind.SMARTOBJECT)) {
-                errors.push("E_VAR_TYPE_MISMATCH: " + required.name);
+                errors.push("E_VAR_TYPE_MISMATCH: " + scope + required.name);
                 break;
             }
+        }
+    }
+    return errors;
+}
+
+function recordLayoutBindingErrors(template, profile) {
+    var errors = [];
+    var configured = profile.record_layout && profile.record_layout.groups;
+    if (!configured || configured.length === 0) {
+        return ["E_CONFIG_MISMATCH: 卫品渠道缺少版式组配置"];
+    }
+    var matches = [];
+    for (var index = 0; index < configured.length; index++) {
+        matches.push([]);
+    }
+    collectRecordLayoutMatches(template, configured, matches);
+    for (var layoutIndex = 0; layoutIndex < configured.length; layoutIndex++) {
+        var layoutName = configured[layoutIndex];
+        var layoutMatches = matches[layoutIndex];
+        if (layoutMatches.length !== 1 || layoutMatches[0].typename !== "LayerSet") {
+            errors.push("E_CONFIG_MISMATCH: 版式组 " + layoutName + " 缺失、重复或不是图层组");
+            continue;
+        }
+        var layout = layoutMatches[0];
+        var scope = layoutName + "/";
+        var layoutErrors = requiredBindingErrors(layout, profile, scope);
+        for (var errorIndex = 0; errorIndex < layoutErrors.length; errorIndex++) {
+            errors.push(layoutErrors[errorIndex]);
+        }
+        var layerIndex = { text: {}, image: {}, switches: {} };
+        addLayers(layout, layerIndex);
+        if (!layerIndex.switches["赠品顶部"] || !layerIndex.switches["赠品区域"]) {
+            errors.push("E_VAR_UNBOUND: " + scope + "赠品开关组未完整绑定");
         }
     }
     return errors;
@@ -483,7 +523,7 @@ function setSwitches(layerIndex, record, result) {
             // Show the group long enough to try each child smart-object
             // replacement. File accessibility is confirmed by setImageLayer;
             // checking an SMB path here used to silently hide an entire group.
-            value = optionalGroupHasValues(layerIndex.switches[key], record) ? "是" : "否";
+            value = (isGiftSwitchKey(key) ? optionalGroupHasAnyValues(layerIndex.switches[key], record) : optionalGroupHasValues(layerIndex.switches[key], record)) ? "是" : "否";
             record[key] = value;
         }
         var visible = false;
@@ -502,9 +542,22 @@ function setSwitches(layerIndex, record, result) {
     }
 }
 
+function isGiftSwitchKey(key) {
+    return key === "赠品顶部" || key === "赠品区域";
+}
+
 function optionalGroupHasValues(groups, record) {
     for (var index = 0; index < groups.length; index++) {
         if (groups[index].typename === "LayerSet" && groupHasAllImageValues(groups[index], record)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function optionalGroupHasAnyValues(groups, record) {
+    for (var index = 0; index < groups.length; index++) {
+        if (groups[index].typename === "LayerSet" && groupHasAnyImageValue(groups[index], record)) {
             return true;
         }
     }
@@ -529,6 +582,21 @@ function groupHasAllImageValues(group, record) {
         }
     }
     return foundImage;
+}
+
+function groupHasAnyImageValue(group, record) {
+    for (var index = 0; index < group.layers.length; index++) {
+        var child = group.layers[index];
+        if (startsWith(child.name, "!")) {
+            var imageValue = record[child.name.substring(1)];
+            if (!isBlank(imageValue) && !isDisabledImageValue(imageValue)) {
+                return true;
+            }
+        } else if (child.typename === "LayerSet" && !startsWith(child.name, "#") && groupHasAnyImageValue(child, record)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 function groupContainsImageLayer(group) {
@@ -563,6 +631,19 @@ function groupHasAllReplacedImageLayers(group, result) {
     return foundImage;
 }
 
+function groupHasAnyReplacedImageLayer(group, result) {
+    for (var index = 0; index < group.layers.length; index++) {
+        var child = group.layers[index];
+        if (startsWith(child.name, "!") && result.optionalImageReplaced[child.name.substring(1)]) {
+            return true;
+        }
+        if (child.typename === "LayerSet" && !startsWith(child.name, "#") && groupHasAnyReplacedImageLayer(child, result)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 function reconcileOptionalGroups(layerIndex, record, result) {
     for (var key in layerIndex.switches) {
         if (!layerIndex.switches.hasOwnProperty(key) || key === "优惠券" || key === "优惠券开关") {
@@ -577,18 +658,19 @@ function reconcileOptionalGroups(layerIndex, record, result) {
             record[key] = "否";
             continue;
         }
-        var allReplaced = false;
+        var hasUsableImage = false;
         for (var index = 0; index < groups.length; index++) {
-            if (groups[index].typename === "LayerSet" && groupHasAllReplacedImageLayers(groups[index], result)) {
-                allReplaced = true;
+            var ready = groups[index].typename === "LayerSet" && (isGiftSwitchKey(key) ? groupHasAnyReplacedImageLayer(groups[index], result) : groupHasAllReplacedImageLayers(groups[index], result));
+            if (ready) {
+                hasUsableImage = true;
                 break;
             }
         }
         for (var groupIndex = 0; groupIndex < groups.length; groupIndex++) {
-            groups[groupIndex].visible = allReplaced;
+            groups[groupIndex].visible = hasUsableImage;
         }
-        record[key] = allReplaced ? "是" : "否";
-        if (allReplaced) {
+        record[key] = hasUsableImage ? "是" : "否";
+        if (hasUsableImage) {
             addIssue(result, "可选图层已展示：#" + key);
         } else if (requested) {
             addIssue(result, "可选图层已隐藏：#" + key);
