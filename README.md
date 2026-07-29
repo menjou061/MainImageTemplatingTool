@@ -2,12 +2,12 @@
 
 面向电商设计师的 Windows + Adobe Photoshop 批量套版工具。选择商品 Excel 和 PSD 模板后，工具会自动完成数据检查、素材替换，并同时导出 JPG 成品和可编辑 PSD。
 
-> 当前版本：**v1.1.0**。新手安装与使用教程见[飞书文档](https://pcnfsebpg8ae.feishu.cn/wiki/HE7JwtImKiaRhLkVNFwcakrmnxg)。
+> 当前版本：**v1.2.0**。新手安装与使用教程见[飞书文档](https://pcnfsebpg8ae.feishu.cn/wiki/HE7JwtImKiaRhLkVNFwcakrmnxg)。
 
 ## 下载与安装
 
 1. 打开 [Releases](https://github.com/menjou061/MainImageTemplatingTool/releases/latest)。
-2. 下载对应版本的 `MainImageTemplatingTool_Windows_v1.1.0.zip`。
+2. 下载对应版本的 `MainImageTemplatingTool_Windows_v1.2.0.zip`。
 3. 把 ZIP 完整解压到本地文件夹，不要直接在压缩包里运行。
 4. 手动启动 Adobe Photoshop，完成登录并等待 Photoshop 首页显示。
 5. 保持 Photoshop 开启，再双击 `开始套版.cmd`。
@@ -17,9 +17,9 @@
 
 ## 使用流程
 
-1. 选择商品信息表格（`.xlsx`）。
-2. 选择要处理的可见运营 Sheet。
-3. 选择该 Sheet 对应的 PSD 模板；工具会按渠道配置识别 750 或 800 规格。
+1. 选择品类和渠道。
+2. 选择该组合对应的商品信息表格（`.xlsx`）和可见运营 Sheet。
+3. 选择该 Sheet 对应的 PSD 模板；工具会按渠道配置识别实际输出尺寸。
 4. 选择全部商品或只勾选部分商品，点击“开始生成”。每次只生成当前 Sheet，不会同时生成另一规格。
 
 如果 Photoshop 没有启动，工具会留在当前设置页提醒先打开 Photoshop，不会创建失败任务。
@@ -58,6 +58,7 @@ v1.0 已在 Adobe Photoshop 2026（27.2）完成验证。其他 Windows 正式�
 
 | 版本 | 说明 |
 |---|---|
+| **v1.2.0** | 新增独立品类/渠道选择和卫品+天猫官旗 750 标准表流程；任务级问题短提示，行级问题仅记录 |
 | **v1.1.0** | 支持按运营 Sheet 选择渠道规格；750/800 改为独立单次任务，按规格隔离输出和任务记录；保留 v1.0 京东自营流程 |
 | **v1.0.0** | 首个设计师团队交付版：四步套版流程、商品勾选、桌面默认保存、JPG/PSD/任务记录分类、异常自动跳过与任务日志、Windows 界面回归验证 |
 
