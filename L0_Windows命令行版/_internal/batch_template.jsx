@@ -197,11 +197,26 @@ function findMaterial(value, materialIndex) {
     // An absolute path that cannot be opened must not fall back to a
     // same-named file from a material folder. That fallback can silently
     // replace a requested stack image with another product asset.
-    if (/^(?:[A-Za-z]:[\\/]|\\\\|\/)/.test(rawValue)) {
+    if (isAbsoluteMaterialPath(rawValue)) {
         return null;
     }
     var key = decodedName(getBasename(value)).toLowerCase();
     return materialIndex ? (materialIndex[key] || null) : null;
+}
+
+function isAbsoluteMaterialPath(value) {
+    var text = trimText(value);
+    if (text.length === 0) {
+        return false;
+    }
+    var first = text.charAt(0);
+    var second = text.charAt(1);
+    var third = text.charAt(2);
+    if (first === "/" || (first === "\\" && second === "\\")) {
+        return true;
+    }
+    var upper = first.toUpperCase();
+    return upper >= "A" && upper <= "Z" && second === ":" && (third === "\\" || third === "/");
 }
 
 function addIssue(result, issue) {
