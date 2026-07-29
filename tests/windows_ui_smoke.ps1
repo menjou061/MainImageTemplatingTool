@@ -4,6 +4,10 @@
     [Parameter(Mandatory = $true)][string]$PsdPath,
     [Parameter(Mandatory = $true)][string]$OutputRoot,
     [Parameter(Mandatory = $true)][string]$ArtifactDir,
+    [string]$Category = '',
+    [string]$Channel = '',
+    [int]$ExpectedJpgWidth = 800,
+    [int]$ExpectedJpgHeight = 800,
     [switch]$UseSingleProduct,
     [switch]$RequireTextOverflow
 )
@@ -81,6 +85,23 @@ function Invoke-Control {
     if (-not $Control) { throw '未找到要点击的控件。' }
     $pattern = $Control.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
     $pattern.Invoke()
+}
+
+function Select-ComboItem {
+    param([System.Windows.Automation.AutomationElement]$Combo, [string]$Name)
+    if (-not $Combo) { throw "未找到下拉框：$Name" }
+    $Combo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+    Start-Sleep -Milliseconds 250
+    $item = [System.Windows.Automation.AutomationElement]::RootElement.FindFirst(
+        [System.Windows.Automation.TreeScope]::Subtree,
+        (New-Object System.Windows.Automation.AndCondition(@(
+            (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, $Name)),
+            (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::ListItem))
+        )))
+    )
+    if (-not $item) { throw "下拉框没有选项：$Name" }
+    $item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+    Start-Sleep -Milliseconds 250
 }
 
 function Show-AutomationWindow {
@@ -188,6 +209,19 @@ try {
 
     $channelWindow = Wait-DesktopWindow -Title '选择品类和渠道' -TimeoutSeconds 45
     Show-AutomationWindow -Window $channelWindow
+    if ($Category -or $Channel) {
+        if (-not $Category -or -not $Channel) { throw '品类和渠道必须同时指定。' }
+        $combos = @($channelWindow.FindAll(
+            [System.Windows.Automation.TreeScope]::Descendants,
+            (New-Object System.Windows.Automation.PropertyCondition(
+                [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+                [System.Windows.Automation.ControlType]::ComboBox
+            ))
+        ) | Sort-Object { $_.Current.BoundingRectangle.Y })
+        if ($combos.Count -ne 2) { throw "品类渠道下拉框数量异常：$($combos.Count)" }
+        Select-ComboItem -Combo $combos[0] -Name $Category
+        Select-ComboItem -Combo $combos[1] -Name $Channel
+    }
     Write-ControlSnapshot -Window $channelWindow -Label '品类渠道选择'
     Capture-Desktop -Name '00-品类渠道选择.png'
     Invoke-Control -Control (Get-Control -Root $channelWindow -Name '下一步' -ControlType ([System.Windows.Automation.ControlType]::Button))
@@ -334,8 +368,8 @@ try {
     foreach ($jpg in $jpgFiles) {
         $image = [System.Drawing.Image]::FromFile($jpg.FullName)
         try {
-            if ($image.Width -ne 800 -or $image.Height -ne 800) {
-                throw "JPG 尺寸异常：$($jpg.FullName)，$($image.Width)x$($image.Height)"
+            if ($image.Width -ne $ExpectedJpgWidth -or $image.Height -ne $ExpectedJpgHeight) {
+                throw "JPG 尺寸异常：$($jpg.FullName)，$($image.Width)x$($image.Height)，预期 $($ExpectedJpgWidth)x$($ExpectedJpgHeight)"
             }
         } finally {
             $image.Dispose()
