@@ -66,12 +66,25 @@ try {
     if (-not (Test-Path -LiteralPath $entry -PathType Leaf)) {
         throw "未找到用户启动入口：$entry"
     }
+    $mainScript = Join-Path $ToolRoot '_internal\L0_Run.ps1'
+    if (-not (Test-Path -LiteralPath $mainScript -PathType Leaf)) {
+        throw "未找到主程序：$mainScript"
+    }
+    $invalidPointExpressions = @(Select-String -LiteralPath $mainScript -Pattern 'New-Object\s+System\.Drawing\.Point\([^\r\n]*,\s*\(if\s*\(')
+    if ($invalidPointExpressions.Count -gt 0) {
+        throw "主程序包含无法执行的 Point(..., (if ...)) 表达式，共 $($invalidPointExpressions.Count) 处。"
+    }
 
     Write-SmokeLog "从用户入口启动：$entry"
     $arguments = '/d /c call "{0}"' -f $entry
     $process = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\cmd.exe') -ArgumentList $arguments -WindowStyle Normal -PassThru
 
-    $mainWindow = Wait-DesktopWindow -Title '电商主图套版工具 1.0'
+    $channelWindow = Wait-DesktopWindow -Title '选择品类和渠道'
+    $nextButton = Get-Control -Root $channelWindow -Name '下一步' -ControlType ([System.Windows.Automation.ControlType]::Button)
+    if (-not $nextButton) { throw '品类渠道选择页缺少下一步按钮。' }
+    $nextButton.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+
+    $mainWindow = Wait-DesktopWindow -Title '电商主图套版工具 1.2'
     $startupHint = Get-Control -Root $mainWindow -Name '请先启动并登录 Photoshop，进入首页后再选择商品表格和 PSD 模板。' -ControlType ([System.Windows.Automation.ControlType]::Text)
     if (-not $startupHint) { throw '初始页缺少 Photoshop 启动提醒。' }
 
