@@ -15,6 +15,20 @@ function Assert-PathIsFile {
     }
 }
 
+function Expand-ReleaseArchive {
+    param([string]$ArchivePath, [string]$DestinationPath)
+    # Windows PowerShell 5.1 Expand-Archive can reject valid UTF-8 ZIP entry
+    # names. Windows 10's bundled tar.exe preserves the designer-facing
+    # Chinese filenames used by the release package.
+    $tar = Get-Command tar.exe -ErrorAction SilentlyContinue
+    if ($tar) {
+        & $tar.Source -xf $ArchivePath -C $DestinationPath
+        if ($LASTEXITCODE -eq 0) { return }
+        throw "tar.exe 无法解压 Release ZIP，退出码：$LASTEXITCODE"
+    }
+    Expand-Archive -LiteralPath $ArchivePath -DestinationPath $DestinationPath -Force
+}
+
 Assert-PathIsFile -Path $ZipPath -Purpose 'Release ZIP'
 Assert-PathIsFile -Path $PsdPath -Purpose '验收 PSD'
 Assert-PathIsFile -Path $ProductImagePath -Purpose '验收商品图'
@@ -33,7 +47,8 @@ $outputRoot = Join-Path $WorkRoot 'output'
 $artifactRoot = Join-Path $WorkRoot 'artifacts'
 $workbookPath = Join-Path $WorkRoot 'release_e2e.xlsx'
 
-Expand-Archive -LiteralPath $ZipPath -DestinationPath $extractRoot -Force
+New-Item -Path $extractRoot -ItemType Directory | Out-Null
+Expand-ReleaseArchive -ArchivePath $ZipPath -DestinationPath $extractRoot
 $allItems = @(Get-ChildItem -LiteralPath $extractRoot -Force -Recurse)
 $entries = @($allItems | Where-Object { -not $_.PSIsContainer })
 if ($entries.Count -lt 1) { throw 'Release ZIP 解压后没有文件。' }
@@ -87,7 +102,7 @@ if ($LASTEXITCODE -ne 0) { throw 'E2E 表格生成失败。' }
 
 $uiSmoke = Join-Path $PSScriptRoot 'windows_ui_smoke.ps1'
 Assert-PathIsFile -Path $uiSmoke -Purpose 'Windows UI 回归脚本'
-& $uiSmoke -ToolRoot $toolRoot -ExcelPath $workbookPath -PsdPath $PsdPath -OutputRoot $outputRoot -ArtifactDir $artifactRoot -UseSingleProduct
+& $uiSmoke -ToolRoot $toolRoot -ExcelPath $workbookPath -PsdPath $PsdPath -OutputRoot $outputRoot -ArtifactDir $artifactRoot -UseSingleProduct -RequireTextOverflow
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath (Join-Path $artifactRoot 'PASS.txt') -PathType Leaf)) {
     throw "Release E2E 未通过，请查看：$artifactRoot"
 }

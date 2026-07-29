@@ -7,6 +7,7 @@
  */
 
 var REQUIRED_TEXT_KEYS = ["卖点", "规格", "到手", "价格1", "价格2", "券名", "折扣", "券门槛", "活动时间"];
+var CHANNEL_PROFILE = $.global.__TEMPLATE_PREP_INPUTS__ && $.global.__TEMPLATE_PREP_INPUTS__.profile;
 var TEXT_NAME_MAP = {
     "卖点": "@卖点",
     "规格": "@规格",
@@ -63,8 +64,57 @@ function findNamedLayers(document, name) {
     return matches;
 }
 
+function usesPhotoshopVariables() {
+    return !!(CHANNEL_PROFILE && CHANNEL_PROFILE.execution_mode === "photoshop_variables");
+}
+
+function expectedVariableKind(type) {
+    return type === "text" ? VariableKind.TEXT : VariableKind.PIXELREPLACEMENT;
+}
+
+function findDocumentVariable(document, name) {
+    if (!document.variables) { return null; }
+    for (var index = 0; index < document.variables.length; index++) {
+        if (document.variables[index].name === name) {
+            return document.variables[index];
+        }
+    }
+    return null;
+}
+
 function templateProblems(document) {
     var issues = [];
+    if (usesPhotoshopVariables()) {
+        for (var variableIndex = 0; variableIndex < CHANNEL_PROFILE.required_psd_variables.length; variableIndex++) {
+            var variableRequired = CHANNEL_PROFILE.required_psd_variables[variableIndex];
+            var documentVariable = findDocumentVariable(document, variableRequired.name);
+            if (!documentVariable) {
+                issues.push("E_VAR_MISSING: " + variableRequired.name);
+            } else if (documentVariable.kind !== expectedVariableKind(variableRequired.type)) {
+                issues.push("E_VAR_TYPE_MISMATCH: " + variableRequired.name);
+            }
+        }
+        return issues;
+    }
+    if (CHANNEL_PROFILE && CHANNEL_PROFILE.required_psd_variables) {
+        for (var profileIndex = 0; profileIndex < CHANNEL_PROFILE.required_psd_variables.length; profileIndex++) {
+            var required = CHANNEL_PROFILE.required_psd_variables[profileIndex];
+            var expectedName = (required.type === "text" ? "@" : "!") + required.name;
+            var bound = findNamedLayers(document, expectedName);
+            if (bound.length === 0) {
+                issues.push("E_VAR_UNBOUND: " + expectedName);
+                continue;
+            }
+            for (var boundIndex = 0; boundIndex < bound.length; boundIndex++) {
+                if ((required.type === "text" && !isTextLayer(bound[boundIndex])) ||
+                    (required.type === "smart_object" && !isSmartObject(bound[boundIndex]))) {
+                    issues.push("E_VAR_TYPE_MISMATCH: " + expectedName);
+                    break;
+                }
+            }
+        }
+        return issues;
+    }
     for (var index = 0; index < REQUIRED_TEXT_KEYS.length; index++) {
         var key = REQUIRED_TEXT_KEYS[index];
         var matches = findNamedLayers(document, "@" + key);
@@ -106,10 +156,82 @@ function findProductCandidates(document) {
     return candidates;
 }
 
+function hasLegacyChannelDesignSignals(document) {
+    // Some channel teams deliver a finished design composition whose layers
+    // are named by visual section (产品/时间/价格), not by the fields that the
+    // batch engine can safely replace.  Treat it as an explicit mapping task
+    // instead of guessing which of several text layers should receive data.
+    var signals = ["产品", "时间", "价格"];
+    var matches = 0;
+    for (var index = 0; index < signals.length; index++) {
+        if (findNamedLayers(document, signals[index]).length > 0) {
+            matches++;
+        }
+    }
+    return matches >= 2;
+}
+
+function profileRequiredVariable(name) {
+    if (!CHANNEL_PROFILE || !CHANNEL_PROFILE.required_psd_variables) { return null; }
+    for (var index = 0; index < CHANNEL_PROFILE.required_psd_variables.length; index++) {
+        if (CHANNEL_PROFILE.required_psd_variables[index].name === name) {
+            return CHANNEL_PROFILE.required_psd_variables[index];
+        }
+    }
+    return null;
+}
+
+function profileBindingsAreUsable(document) {
+    if (!CHANNEL_PROFILE || !CHANNEL_PROFILE.template_bindings) { return false; }
+    for (var target in CHANNEL_PROFILE.template_bindings) {
+        if (!CHANNEL_PROFILE.template_bindings.hasOwnProperty(target)) { continue; }
+        var sourceLayers = findNamedLayers(document, CHANNEL_PROFILE.template_bindings[target]);
+        var required = profileRequiredVariable(target);
+        if (!required || sourceLayers.length !== 1) { return false; }
+        if (required.type === "text" && !isTextLayer(sourceLayers[0])) { return false; }
+        if (required.type === "smart_object" && sourceLayers[0].typename !== "ArtLayer") { return false; }
+    }
+    return true;
+}
+
+function applyProfileBindings(document) {
+    if (!CHANNEL_PROFILE || !CHANNEL_PROFILE.template_bindings) { return; }
+    for (var target in CHANNEL_PROFILE.template_bindings) {
+        if (!CHANNEL_PROFILE.template_bindings.hasOwnProperty(target)) { continue; }
+        var sourceLayers = findNamedLayers(document, CHANNEL_PROFILE.template_bindings[target]);
+        var required = profileRequiredVariable(target);
+        if (!required || sourceLayers.length !== 1) {
+            throw new Error("模板图层映射失效：" + target);
+        }
+        var layer = sourceLayers[0];
+        if (required.type === "text") {
+            if (!isTextLayer(layer)) { throw new Error("映射图层不是文本层：" + target); }
+            layer.name = "@" + target;
+        } else {
+            convertToSmartObject(document, layer, target);
+        }
+    }
+}
+
 function inspectPreparation(document) {
     var existing = templateProblems(document);
     if (existing.length === 0) {
-        return { status: "READY", message: "模板已符合 @文本、!智能对象命名规范。" };
+        return { status: "READY", message: usesPhotoshopVariables() ? "模板 PSD Variables 名称、类型和绑定关系已通过体检。" : "模板已符合 @文本、!智能对象命名规范。" };
+    }
+
+    if (usesPhotoshopVariables()) {
+        return { status: "AMBIGUOUS", message: "PSD Variables 体检未通过：" + existing.join("；") + "。请模板制作人员恢复变量绑定后重试。" };
+    }
+
+    if (profileBindingsAreUsable(document)) {
+        return { status: "NEEDS_PREP", message: "已识别当前渠道模板图层映射，将生成套版模板副本。" };
+    }
+
+    if (hasLegacyChannelDesignSignals(document)) {
+        return {
+            status: "AMBIGUOUS",
+            message: "检测到渠道设计稿图层（产品/时间/价格），但未按工具字段命名。请模板制作人员先将动态文字改为 @字段、商品图改为 !商品图智能对象后再运行。"
+        };
     }
 
     var candidates = findProductCandidates(document);
@@ -135,7 +257,7 @@ function inspectPreparation(document) {
     return { status: "NEEDS_PREP", message: existing.join("；") };
 }
 
-function convertToSmartObject(document, layer) {
+function convertToSmartObject(document, layer, targetName) {
     document.activeLayer = layer;
     if (!isSmartObject(layer)) {
         executeAction(stringIDToTypeID("newPlacedLayer"), undefined, DialogModes.NO);
@@ -143,7 +265,7 @@ function convertToSmartObject(document, layer) {
     if (!isSmartObject(document.activeLayer)) {
         throw new Error("商品图层转换智能对象失败");
     }
-    document.activeLayer.name = "!商品图";
+    document.activeLayer.name = "!" + (targetName || "商品图");
 }
 
 function prepareTemplate(document) {
@@ -156,6 +278,16 @@ function prepareTemplate(document) {
     }
 
     var all = [];
+    addAllLayers(document, all);
+    applyProfileBindings(document);
+    if (CHANNEL_PROFILE && CHANNEL_PROFILE.template_bindings) {
+        var profileProblems = templateProblems(document);
+        if (profileProblems.length > 0) {
+            throw new Error("自动改造后仍不完整：" + profileProblems.join("；"));
+        }
+        return { status: "PREPARED", message: "已按当前渠道映射完成图层命名和商品智能对象转换。" };
+    }
+    all = [];
     addAllLayers(document, all);
     for (var index = 0; index < all.length; index++) {
         var layer = all[index];
