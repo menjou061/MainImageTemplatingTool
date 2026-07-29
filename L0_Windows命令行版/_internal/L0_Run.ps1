@@ -1775,6 +1775,7 @@ function Invoke-TemplatePreparationCheck {
     if (-not (Test-Path -LiteralPath $templatePrepareScript -PathType Leaf)) {
         throw "缺少 PSD 模板检测脚本：$templatePrepareScript"
     }
+    $startedAt = Get-Date
     $script:OpenedDocument = $Application.Open($TemplatePath)
     try {
         $templateText = [System.IO.File]::ReadAllText($templatePrepareScript, [System.Text.Encoding]::UTF8)
@@ -1786,6 +1787,7 @@ function Invoke-TemplatePreparationCheck {
         return $result
     } finally {
         Close-OpenedPhotoshopDocument
+        Add-Log (Get-ElapsedText -StartedAt $startedAt -Label ("PSD 模板 " + $Mode))
     }
 }
 
@@ -1794,6 +1796,24 @@ function Resolve-TemplateForTask {
         [object]$Application,
         [string]$TemplatePath
     )
+    # The hygiene template can contain more than a thousand design layers.
+    # Its active layout groups are known after data preflight, so open it once
+    # and prepare only those groups instead of first scanning the full PSD in a
+    # separate check invocation.
+    if ($selectedProfile -and $selectedProfile.layout -eq 'record_rows') {
+        Set-RunProgress -Stage 'PSD 模板体检与映射' -Detail '仅检查并映射本次商品实际使用的版式图层；未使用版式不会改造。'
+        $targeted = Invoke-TemplatePreparationCheck -Application $Application -TemplatePath $TemplatePath -Mode 'prepare'
+        if ($targeted.Status -eq 'READY') {
+            Add-Log 'PSD 模板已通过本次版式体检，直接使用原模板。'
+            return $TemplatePath
+        }
+        if ($targeted.Status -eq 'PREPARED' -and -not [string]::IsNullOrWhiteSpace($targeted.TemplatePath) -and (Test-Path -LiteralPath $targeted.TemplatePath -PathType Leaf)) {
+            Add-Log "PSD 模板已生成本次版式的映射副本：$($targeted.TemplatePath)"
+            return $targeted.TemplatePath
+        }
+        throw "PSD 模板体检或映射未完成：$($targeted.Message)"
+    }
+
     $check = Invoke-TemplatePreparationCheck -Application $Application -TemplatePath $TemplatePath -Mode 'check'
     if ($check.Status -eq 'READY') {
         return $TemplatePath
@@ -1831,18 +1851,54 @@ function Resolve-TemplateForTask {
     return $prepared.TemplatePath
 }
 
-function Get-TaskElapsedText {
-    param([datetime]$StartedAt)
+function Get-ElapsedText {
+    param(
+        [datetime]$StartedAt,
+        [string]$Label
+    )
     if (-not $StartedAt) {
-        return '耗时未记录'
+        return "$Label 耗时未记录"
     }
     $seconds = [math]::Max(1, [int][math]::Round(((Get-Date) - $StartedAt).TotalSeconds, 0, [System.MidpointRounding]::AwayFromZero))
     if ($seconds -lt 60) {
-        return "本次任务耗时：$seconds 秒"
+        return "$Label 耗时：$seconds 秒"
     }
     $minutes = [math]::Floor($seconds / 60)
     $remainingSeconds = $seconds % 60
-    return "本次任务耗时：$minutes 分 $remainingSeconds 秒"
+    return "$Label 耗时：$minutes 分 $remainingSeconds 秒"
+}
+
+function Get-TaskElapsedText {
+    param([datetime]$StartedAt)
+    return (Get-ElapsedText -StartedAt $StartedAt -Label '本次任务')
+}
+
+function Get-ActiveRecordLayoutGroups {
+    param(
+        [object[]]$Rows,
+        [object]$ProfileConfig
+    )
+    if (-not $ProfileConfig -or $ProfileConfig.layout -ne 'record_rows') {
+        return @()
+    }
+    $configured = @($ProfileConfig.record_layout.groups)
+    if ($configured.Count -eq 0) {
+        throw 'E_CONFIG_MISMATCH：卫品渠道未配置可用版式组。'
+    }
+    $selected = New-Object System.Collections.Generic.List[string]
+    foreach ($row in $Rows) {
+        $layout = [string]$row.版式组
+        if ([string]::IsNullOrWhiteSpace($layout)) {
+            throw 'E_CONFIG_MISMATCH：有效商品缺少模板版式。'
+        }
+        if ($configured -notcontains $layout) {
+            throw "E_CONFIG_MISMATCH：表格版式【$layout】未在当前渠道配置中声明。"
+        }
+        if (-not $selected.Contains($layout)) {
+            $selected.Add($layout)
+        }
+    }
+    return @($selected)
 }
 
 function Show-TaskCompletionDialog {
@@ -2034,15 +2090,6 @@ try {
     $script:CurrentSheetName = $sheetName
     $script:CurrentProductName = $selectedProduct
 
-    Set-RunProgress -Stage '检测 PSD 模板' -Detail '正在检查所选 PSD 是否已按智能化套版规范改造。'
-    $photoshop = Start-Photoshop
-    $preparedPsdPath = Resolve-TemplateForTask -Application $photoshop -TemplatePath $psdPath
-    if ($preparedPsdPath -ne $psdPath) {
-        $psdPath = $preparedPsdPath
-        $script:CurrentPsdPath = $psdPath
-        Add-Log "本次任务将使用自动生成的模板副本：$psdPath"
-    }
-
     Set-RunProgress -Stage '建立任务文件夹' -Detail '正在创建本次任务的 JPG、PSD 和任务记录文件夹。'
     $taskOutputDir = New-TaskOutputDirectory -OutputRoot $outputRoot -SheetName $sheetName -ProfileId $profileId -Variant $variantId
     # Keep v1.0 JD self-operated output paths unchanged. New approved profiles
@@ -2121,23 +2168,6 @@ try {
     }
     $script:CurrentProductName = $selectedProduct
     Save-UserSettings -ExcelPath $excelPath -PsdPath $psdPath -Psd750Path $Psd750Path -OutputRoot $outputRoot -SheetName $sheetName -ProductName $selectedProduct
-    $taskInfo = @(
-        '电商主图套版任务信息',
-        '',
-        "创建时间：$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss'))",
-        "商品表格：$excelPath",
-        "PSD 模板：$psdPath",
-        "数据工作表：$sheetName",
-        "Profile：$profileId@$($selectedProfile.profile_version)",
-        "Variant：$variantId（$($selectedVariant.width)x$($selectedVariant.height)）",
-        "商品范围：$(if ($selectedProduct) { $selectedProduct } else { '全部商品' })",
-        "JPG 成品：$jpgOutputDir",
-        "PSD 源文件：$psdOutputDir",
-        '',
-        '异常商品会自动跳过，具体原因请查看同目录的异常记录.csv。'
-    ) -join [Environment]::NewLine
-    Write-Utf8Bom -Path (Join-Path $taskRecordDir '任务信息.txt') -Content ($taskInfo + [Environment]::NewLine)
-
     # All interactive pickers have closed. Showing progress now cannot cover them.
     New-RunProgressWindow
     Set-RunProgress -Stage '数据预检' -Detail '正在校验字段、价格和 Excel 中每个商品素材的完整文件路径。不会扫描共享盘。'
@@ -2231,7 +2261,40 @@ try {
         Add-Log "任务级提示 W_PRICE_UNCONFIRMED：发现 $($priceSingleRows.Count) 条记录由【价格】单值拆分为【价格1/价格2】，请业务复核价格口径；该提示仅汇总一次，不阻断套版。"
     }
 
+    $activeLayoutGroups = Get-ActiveRecordLayoutGroups -Rows $dataRows -ProfileConfig $selectedProfile
+    if ($activeLayoutGroups.Count -gt 0) {
+        $selectedProfile | Add-Member -NotePropertyName active_layout_groups -NotePropertyValue @($activeLayoutGroups) -Force
+        Add-Log ("本次仅映射卫品版式：" + ($activeLayoutGroups -join '、'))
+    }
+    # The data preflight now supplies the actual layout scope to both JSX
+    # scripts. This prevents a first run from converting unrelated designs.
+    $profileJson = $selectedProfile | ConvertTo-Json -Depth 8 -Compress
+
     Set-RunProgress -Stage '启动 Photoshop' -Detail '数据预检通过，已连接 Photoshop，准备打开模板。'
+    $photoshop = Start-Photoshop
+    $preparedPsdPath = Resolve-TemplateForTask -Application $photoshop -TemplatePath $psdPath
+    if ($preparedPsdPath -ne $psdPath) {
+        $psdPath = $preparedPsdPath
+        $script:CurrentPsdPath = $psdPath
+        Add-Log "本次任务将使用自动生成的模板副本：$psdPath"
+    }
+    $taskInfo = @(
+        '电商主图套版任务信息',
+        '',
+        "创建时间：$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss'))",
+        "商品表格：$excelPath",
+        "PSD 模板：$psdPath",
+        "数据工作表：$sheetName",
+        "Profile：$profileId@$($selectedProfile.profile_version)",
+        "Variant：$variantId（$($selectedVariant.width)x$($selectedVariant.height)）",
+        "商品范围：$(if ($selectedProduct) { $selectedProduct } else { '全部商品' })",
+        "本次映射版式：$(if ($activeLayoutGroups.Count -gt 0) { $activeLayoutGroups -join '、' } else { '不适用' })",
+        "JPG 成品：$jpgOutputDir",
+        "PSD 源文件：$psdOutputDir",
+        '',
+        '异常商品会自动跳过，具体原因请查看同目录的异常记录.csv。'
+    ) -join [Environment]::NewLine
+    Write-Utf8Bom -Path (Join-Path $taskRecordDir '任务信息.txt') -Content ($taskInfo + [Environment]::NewLine)
     Set-RunProgress -Stage '打开 PSD 模板' -Detail '正在打开模板。Photoshop 出现后请勿关闭。'
     $script:OpenedDocument = $photoshop.Open($psdPath)
     Start-Sleep -Seconds 2

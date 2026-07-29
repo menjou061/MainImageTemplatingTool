@@ -37,8 +37,27 @@ class HygieneTemplatePreparationTest(unittest.TestCase):
     def test_every_layout_must_keep_all_dynamic_bindings(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
 
-        self.assertIn("findNamedLayersWithin(layout, expected[index])", source)
+        self.assertIn("findNamedLayersWithin(layout, expected[index], layerIndex)", source)
         self.assertIn('problems.push("E_VAR_UNBOUND: " + configured[layoutIndex] + "/" + expected[index])', source)
+
+    def test_preparation_uses_only_the_layouts_selected_for_this_task(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn("function hygieneLayoutGroupNames()", source)
+        self.assertIn("CHANNEL_PROFILE.active_layout_groups", source)
+        self.assertIn("var groups = hygieneLayoutGroupNames();", source)
+        self.assertIn("prepareHygieneTemplate(document, layerIndex", source)
+
+    def test_large_psd_preparation_builds_one_index_and_skips_full_layer_report(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn("function buildLayerIndex(document)", source)
+        self.assertIn("var layerIndex = buildLayerIndex(document);", source)
+        report_start = source.index("function writePreparationReport")
+        report_end = source.index("function main()", report_start)
+        report = source[report_start:report_end]
+        self.assertNotIn("addAllLayers(document, all)", report)
+        self.assertIn("仅处理本次任务版式", report)
 
 
 if __name__ == "__main__":

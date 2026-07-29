@@ -37,4 +37,24 @@ sandbox.reconcileOptionalGroups(layerIndex, record, result);
 assert.equal(record["赠品区域"], "是", "a successfully replaced second gift must remain visible");
 assert.equal(giftRegion.visible, true);
 
+const templateProfile = {
+    layout: "record_rows",
+    required_psd_variables: [{ name: "卖点", type: "text" }],
+    record_layout: { groups: ["本次版式", "未使用版式"] },
+    active_layout_groups: ["本次版式"],
+};
+const activeLayout = group("本次版式", [
+    layer("@卖点"),
+    group("#赠品顶部"),
+    group("#赠品区域"),
+]);
+activeLayout.layers[0].kind = "TEXT";
+const inactiveLayout = group("未使用版式", []);
+sandbox.LayerKind = { TEXT: "TEXT", SMARTOBJECT: "SMARTOBJECT" };
+assert.equal(
+    sandbox.recordLayoutBindingErrors(group("模板", [activeLayout, inactiveLayout]), templateProfile).length,
+    0,
+    "validation must require only layouts selected by the preflighted task"
+);
+
 console.log("hygiene gift switch regression: ok");
