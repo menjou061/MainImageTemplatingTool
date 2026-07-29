@@ -457,13 +457,14 @@ function recordLayoutBindingErrors(template, profile) {
     if (!configured || configured.length === 0) {
         return ["E_CONFIG_MISMATCH: 卫品渠道缺少版式组配置"];
     }
+    var requested = profile.active_layout_groups && profile.active_layout_groups.length > 0 ? profile.active_layout_groups : configured;
     var matches = [];
-    for (var index = 0; index < configured.length; index++) {
+    for (var index = 0; index < requested.length; index++) {
         matches.push([]);
     }
-    collectRecordLayoutMatches(template, configured, matches);
-    for (var layoutIndex = 0; layoutIndex < configured.length; layoutIndex++) {
-        var layoutName = configured[layoutIndex];
+    collectRecordLayoutMatches(template, requested, matches);
+    for (var layoutIndex = 0; layoutIndex < requested.length; layoutIndex++) {
+        var layoutName = requested[layoutIndex];
         var layoutMatches = matches[layoutIndex];
         if (layoutMatches.length !== 1 || layoutMatches[0].typename !== "LayerSet") {
             errors.push("E_CONFIG_MISMATCH: 版式组 " + layoutName + " 缺失、重复或不是图层组");
