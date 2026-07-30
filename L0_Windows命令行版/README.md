@@ -86,6 +86,13 @@ v1.2 延续 v1.0 在 Adobe Photoshop 2026（27.2）的验证基线。其他 Wind
 - Photoshop 安装注册损坏、自动化接口不可用或版本不兼容：提醒重启或修复 Photoshop，技术原因写入工具任务记录。
 - 生成中出现模板、脚本或 Photoshop 内部错误：不反复弹出长报错，详情写入本次成品的 `任务记录`。
 
+Photoshop 单次 JSX 调用默认最多运行 900 秒（15 分钟）。超时会记录
+`E_PHOTOSHOP_TIMEOUT` 并判定任务失败，不会显示为成功。需要调整时，可在启动前设置
+`MAINIMAGE_PHOTOSHOP_TIMEOUT_SECONDS`（30-7200 秒），或在
+`%LOCALAPPDATA%\电商主图套版工具\settings.json` 写入 `photoshopTimeoutSeconds`。
+任务完成前还会检查 `生成结果.csv`、JPG 文件头、PSD 的 `8BPS` 文件头和可编辑图层；
+缺失、截断或无图层的产物会记录 `E_OUTPUT_INCOMPLETE` 并判定失败。
+
 ## 故障记录
 
 任务相关文件在本次成品目录的 `任务记录` 中。工具级任务历史与启动诊断保存在：

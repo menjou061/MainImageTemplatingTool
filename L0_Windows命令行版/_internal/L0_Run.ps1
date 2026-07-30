@@ -68,6 +68,8 @@ $script:CurrentExcelPath = ''
 $script:CurrentPsdPath = ''
 $script:CurrentSheetName = ''
 $script:CurrentProductName = ''
+$script:PhotoshopTimeoutSeconds = 900
+$script:DefaultPhotoshopTimeoutSeconds = 900
 
 function Write-Utf8Bom {
     param(
@@ -302,6 +304,119 @@ function Get-PhotoshopResultSummary {
     }
 }
 
+function Test-OutputFileSignature {
+    param(
+        [string]$Path,
+        [string]$Kind
+    )
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return [pscustomobject]@{ Valid = $false; Detail = "文件不存在：$Path" }
+    }
+    $file = Get-Item -LiteralPath $Path -ErrorAction Stop
+    if ($file.Length -lt 256) {
+        return [pscustomobject]@{ Valid = $false; Detail = "文件过小（$($file.Length) 字节）：$Path" }
+    }
+    $stream = $null
+    try {
+        $stream = [System.IO.File]::OpenRead($Path)
+        $bytes = New-Object byte[] 4
+        $read = $stream.Read($bytes, 0, $bytes.Length)
+        if ($Kind -eq 'psd') {
+            # PSD stores section lengths and layer count as big-endian values.
+            # A truncated save can still contain the 8BPS header, so validate
+            # the layer/mask section and require at least one layer as well.
+            $readBigEndianUInt32 = {
+                param([System.IO.Stream]$InputStream, [int64]$Offset)
+                if ($Offset -lt 0 -or $Offset + 4 -gt $InputStream.Length) { return $null }
+                $null = $InputStream.Seek($Offset, [System.IO.SeekOrigin]::Begin)
+                $chunk = New-Object byte[] 4
+                if ($InputStream.Read($chunk, 0, 4) -ne 4) { return $null }
+                return ([int64]$chunk[0] -shl 24) -bor ([int64]$chunk[1] -shl 16) -bor ([int64]$chunk[2] -shl 8) -bor [int64]$chunk[3]
+            }
+            if ($file.Length -lt 42) {
+                return [pscustomobject]@{ Valid = $false; Detail = "PSD 文件结构过短：$Path" }
+            }
+            $colorLength = & $readBigEndianUInt32 $stream 26
+            $resourceLengthOffset = 30 + $colorLength
+            $resourceLength = & $readBigEndianUInt32 $stream $resourceLengthOffset
+            $layerLengthOffset = 34 + $colorLength + $resourceLength
+            $layerLength = & $readBigEndianUInt32 $stream $layerLengthOffset
+            if ($null -eq $colorLength -or $null -eq $resourceLength -or $null -eq $layerLength -or $layerLength -lt 2) {
+                return [pscustomobject]@{ Valid = $false; Detail = "PSD 图层/资源区不完整：$Path" }
+            }
+            $layerCountOffset = $layerLengthOffset + 4
+            if ($layerCountOffset + 2 -gt $file.Length) {
+                return [pscustomobject]@{ Valid = $false; Detail = "PSD 图层区超出文件范围：$Path" }
+            }
+            $null = $stream.Seek($layerCountOffset, [System.IO.SeekOrigin]::Begin)
+            $layerCountBytes = New-Object byte[] 2
+            $null = $stream.Read($layerCountBytes, 0, 2)
+            $layerCount = ([int]$layerCountBytes[0] -shl 8) -bor [int]$layerCountBytes[1]
+            if ($layerCount -eq 0) {
+                return [pscustomobject]@{ Valid = $false; Detail = "PSD 没有可编辑图层：$Path" }
+            }
+        }
+    } finally {
+        if ($stream) { $stream.Dispose() }
+    }
+    if ($Kind -eq 'jpg' -and ($read -lt 3 -or $bytes[0] -ne 0xFF -or $bytes[1] -ne 0xD8 -or $bytes[2] -ne 0xFF)) {
+        return [pscustomobject]@{ Valid = $false; Detail = "不是有效 JPEG 文件：$Path" }
+    }
+    if ($Kind -eq 'psd' -and ($read -lt 4 -or [char]$bytes[0] -ne '8' -or [char]$bytes[1] -ne 'B' -or [char]$bytes[2] -ne 'P' -or [char]$bytes[3] -ne 'S')) {
+        return [pscustomobject]@{ Valid = $false; Detail = "不是有效 PSD 文件（缺少 8BPS 文件头）：$Path" }
+    }
+    return [pscustomobject]@{ Valid = $true; Detail = "$Kind 文件有效：$Path（$($file.Length) 字节）" }
+}
+
+function Assert-PhotoshopOutputArtifacts {
+    param(
+        [string]$ResultReport,
+        [string]$JpgOutputDir,
+        [string]$PsdOutputDir
+    )
+    if (-not (Test-Path -LiteralPath $ResultReport -PathType Leaf)) {
+        throw "E_OUTPUT_INCOMPLETE：缺少 Photoshop 结果报告：$ResultReport"
+    }
+    $rows = @(Import-Csv -LiteralPath $ResultReport -Encoding UTF8)
+    if ($rows.Count -eq 0) {
+        throw "E_OUTPUT_INCOMPLETE：结果报告没有商品记录：$ResultReport"
+    }
+    $successRows = @($rows | Where-Object { [string]$_.状态 -eq '成功' })
+    if ($successRows.Count -eq 0) {
+        $rowsWithOutput = @($rows | Where-Object {
+            -not [string]::IsNullOrWhiteSpace([string]$_.输出文件) -or
+            -not [string]::IsNullOrWhiteSpace([string]$_.输出PSD)
+        })
+        if ($rowsWithOutput.Count -eq 0) {
+            throw "E_OUTPUT_INCOMPLETE：结果报告没有任何 JPG/PSD 产物记录：$ResultReport"
+        }
+        return [pscustomobject]@{ SuccessCount = 0; CheckedCount = 0 }
+    }
+    $checked = 0
+    foreach ($row in $successRows) {
+        $jpgPath = [string]$row.输出文件
+        $psdPath = [string]$row.输出PSD
+        if ([string]::IsNullOrWhiteSpace($jpgPath) -or [string]::IsNullOrWhiteSpace($psdPath)) {
+            throw "E_OUTPUT_INCOMPLETE：成功记录缺少 JPG 或 PSD 路径：$($row.商品文件名)"
+        }
+        $jpgCheck = Test-OutputFileSignature -Path $jpgPath -Kind 'jpg'
+        if (-not $jpgCheck.Valid) {
+            throw "E_OUTPUT_INCOMPLETE：$($jpgCheck.Detail)；商品：$($row.商品文件名)"
+        }
+        $psdCheck = Test-OutputFileSignature -Path $psdPath -Kind 'psd'
+        if (-not $psdCheck.Valid) {
+            throw "E_OUTPUT_INCOMPLETE：$($psdCheck.Detail)；商品：$($row.商品文件名)"
+        }
+        $checked++
+    }
+    $jpgCount = @(Get-ChildItem -LiteralPath $JpgOutputDir -Filter '*.jpg' -File -ErrorAction SilentlyContinue).Count
+    $psdCount = @(Get-ChildItem -LiteralPath $PsdOutputDir -Filter '*.psd' -File -ErrorAction SilentlyContinue).Count
+    if ($jpgCount -lt $successRows.Count -or $psdCount -lt $successRows.Count) {
+        throw "E_OUTPUT_INCOMPLETE：结果报告成功 $($successRows.Count) 条，但 JPG/PSD 产物数量为 $jpgCount/$psdCount。"
+    }
+    return [pscustomobject]@{ SuccessCount = $successRows.Count; CheckedCount = $checked }
+}
+
 function ConvertTo-JsStringLiteral {
     param([string]$Value)
     if ($null -eq $Value) {
@@ -365,6 +480,22 @@ function Get-SettingText {
         return [string]$Settings.$Name
     }
     return ''
+}
+
+function Resolve-PhotoshopTimeoutSeconds {
+    param([object]$Settings)
+    $raw = [string]$env:MAINIMAGE_PHOTOSHOP_TIMEOUT_SECONDS
+    if ([string]::IsNullOrWhiteSpace($raw)) {
+        $raw = Get-SettingText -Settings $Settings -Name 'photoshopTimeoutSeconds'
+    }
+    $seconds = 0
+    if (-not [int]::TryParse($raw, [ref]$seconds) -or $seconds -lt 30 -or $seconds -gt 7200) {
+        if (-not [string]::IsNullOrWhiteSpace($raw)) {
+            Add-Log "Photoshop 超时配置无效（需 30-7200 秒）：$raw；使用默认 $($script:DefaultPhotoshopTimeoutSeconds) 秒。"
+        }
+        return $script:DefaultPhotoshopTimeoutSeconds
+    }
+    return $seconds
 }
 
 function Save-UserSettings {
@@ -1728,17 +1859,50 @@ function Start-Photoshop {
 function Invoke-PhotoshopJavaScript {
     param(
         [object]$Application,
-        [string]$ScriptText
+        [string]$ScriptText,
+        [int]$TimeoutSeconds = 0
     )
-    try {
-        return $Application.DoJavaScript($ScriptText, @(), 2)
-    } catch {
-        $firstError = $_.Exception.Message
+    $timeout = if ($TimeoutSeconds -gt 0) { $TimeoutSeconds } else { $script:PhotoshopTimeoutSeconds }
+    $progIds = @(Get-PhotoshopComProgIds)
+    if ($progIds.Count -eq 0) {
+        throw 'E_PHOTOSHOP_UNAVAILABLE：未找到 Photoshop COM ProgID。'
     }
+    $job = $null
     try {
-        return $Application.DoJavaScript($ScriptText, @())
-    } catch {
-        throw "DoJavaScript 调用失败：$firstError / $($_.Exception.Message)"
+        $job = Start-Job -ScriptBlock {
+            param($candidateProgIds, $jsx)
+            $lastError = ''
+            foreach ($candidateProgId in @($candidateProgIds)) {
+                try {
+                    $app = New-Object -ComObject $candidateProgId -ErrorAction Stop
+                    try {
+                        return $app.DoJavaScript($jsx, @(), 2)
+                    } catch {
+                        return $app.DoJavaScript($jsx, @())
+                    }
+                } catch {
+                    $lastError = "$candidateProgId：$($_.Exception.Message)"
+                }
+            }
+            throw "DoJavaScript 调用失败：$lastError"
+        } -ArgumentList (,$progIds), $ScriptText -ErrorAction Stop
+        $deadline = (Get-Date).AddSeconds($timeout)
+        while ($job.State -eq 'Running' -and (Get-Date) -lt $deadline) {
+            Wait-Job -Job $job -Timeout 1 | Out-Null
+        }
+        if ($job.State -eq 'Running') {
+            Stop-Job -Job $job -ErrorAction SilentlyContinue | Out-Null
+            throw "E_PHOTOSHOP_TIMEOUT：Photoshop 脚本执行超过 $timeout 秒，已终止自动化调用。请检查 Photoshop 是否卡住、PSD 是否过大或是否存在隐藏弹窗。"
+        }
+        if ($job.State -eq 'Failed') {
+            $jobError = ($job.ChildJobs | ForEach-Object { $_.JobStateInfo.Reason } | Where-Object { $_ } | Select-Object -First 1)
+            throw "E_PHOTOSHOP_SCRIPT_FAILED：$jobError"
+        }
+        return (Receive-Job -Job $job -ErrorAction Stop | Select-Object -Last 1)
+    } finally {
+        if ($job) {
+            Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 
@@ -2006,6 +2170,8 @@ try {
     Set-RunProgress -Stage '预检运行环境' -Detail '正在检查工具自带运行环境。首次修复运行环境时需要联网。'
     $python = Ensure-PythonRuntime
     $script:Settings = Read-UserSettings
+    $script:PhotoshopTimeoutSeconds = Resolve-PhotoshopTimeoutSeconds -Settings $script:Settings
+    Add-Log "Photoshop 单次脚本超时：$($script:PhotoshopTimeoutSeconds) 秒（可用 MAINIMAGE_PHOTOSHOP_TIMEOUT_SECONDS 或 settings.json 的 photoshopTimeoutSeconds 覆盖）。"
     if (-not (Test-Path -LiteralPath $channelProfilesPath -PathType Leaf)) { throw "E_PROFILE_UNSUPPORTED: 缺少 profile 配置：$channelProfilesPath" }
     $profileDocument = Get-Content -LiteralPath $channelProfilesPath -Raw -Encoding UTF8 | ConvertFrom-Json
     $profileId = $Profile
@@ -2348,6 +2514,8 @@ try {
 
     $resultReport = Join-Path $jpgOutputDir '结果报告.csv'
     $resultSummary = Get-PhotoshopResultSummary -ResultReport $resultReport -JpgOutputDir $jpgOutputDir
+    $artifactCheck = Assert-PhotoshopOutputArtifacts -ResultReport $resultReport -JpgOutputDir $jpgOutputDir -PsdOutputDir $psdOutputDir
+    Add-Log "Photoshop 产物完整性检查通过：成功记录 $($artifactCheck.SuccessCount) 条，已校验 $($artifactCheck.CheckedCount) 组 JPG/PSD。"
     $storedResultReport = Join-Path $taskRecordDir '生成结果.csv'
     Move-Item -LiteralPath $resultReport -Destination $storedResultReport -Force
     $resultReport = $storedResultReport
