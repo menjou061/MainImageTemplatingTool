@@ -513,6 +513,10 @@ function Save-UserSettings {
         productName = $ProductName
         updatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
     }
+    $timeoutSetting = Get-SettingText -Settings $script:Settings -Name 'photoshopTimeoutSeconds'
+    if (-not [string]::IsNullOrWhiteSpace($timeoutSetting)) {
+        $payload | Add-Member -NotePropertyName 'photoshopTimeoutSeconds' -NotePropertyValue $timeoutSetting
+    }
     try {
         $json = $payload | ConvertTo-Json -Depth 4
         Write-Utf8Bom -Path $settingsPath -Content ($json + [Environment]::NewLine)
@@ -2573,11 +2577,15 @@ try {
     }
     Write-EntryFailureReport -ErrorSummary $message -Suggestion '错误已经写入工具任务记录；需要排查时，请提供任务文件夹中的任务记录，或用户目录下的工具任务记录。'
     Write-TaskHistory -Status '失败' -Message $message
-    if (-not $NoUi -and $_.Exception.Message -match 'E_(PROFILE_[A-Z_]+|CONFIG_MISMATCH|VAR_[A-Z_]+|SIZE_MISMATCH)') {
-        $errorCode = $Matches[0]
+    if (-not $NoUi -and $_.Exception.Message -notmatch '^已取消') {
+        $errorCode = if ($_.Exception.Message -match 'E_(PROFILE_[A-Z_]+|CONFIG_MISMATCH|VAR_[A-Z_]+|SIZE_MISMATCH)') {
+            $Matches[0]
+        } else {
+            'TASK_FAILED'
+        }
         [void][System.Windows.Forms.MessageBox]::Show(
-            "本次任务未开始：表格、渠道或模板配置未通过检查。`r`n错误码：$errorCode`r`n详情已写入工具任务记录。",
-            '任务未开始',
+            "本次任务未完成。`r`n错误码：$errorCode`r`n详情已写入工具任务记录。",
+            '套版失败',
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Warning
         )

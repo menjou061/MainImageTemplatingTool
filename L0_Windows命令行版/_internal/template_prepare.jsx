@@ -19,10 +19,12 @@ var TEXT_NAME_MAP = {
     "满129可用": "@券门槛",
     "券门槛": "@券门槛",
     "时间": "@活动时间",
+    "@时间": "@活动时间",
     "活动时间": "@活动时间"
 };
 var PRODUCT_LAYER_NAMES = {
     "!商品图": true,
+    "!堆图": true,
     "商品图": true,
     "堆图": true,
     "产品图": true,
@@ -82,6 +84,18 @@ function isTextLayer(layer) {
 
 function isSmartObject(layer) {
     return layer.typename === "ArtLayer" && layer.kind === LayerKind.SMARTOBJECT;
+}
+
+function isOptionalProfileVariable(required) {
+    if (!CHANNEL_PROFILE || !CHANNEL_PROFILE.optional_psd_variables) {
+        return false;
+    }
+    for (var index = 0; index < CHANNEL_PROFILE.optional_psd_variables.length; index++) {
+        if (String(CHANNEL_PROFILE.optional_psd_variables[index]) === String(required.name)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 function findNamedLayers(document, name, layerIndex) {
@@ -367,6 +381,9 @@ function templateProblems(document) {
             var expectedName = (required.type === "text" ? "@" : "!") + required.name;
             var bound = findNamedLayers(document, expectedName);
             if (bound.length === 0) {
+                if (isOptionalProfileVariable(required)) {
+                    continue;
+                }
                 issues.push("E_VAR_UNBOUND: " + expectedName);
                 continue;
             }
@@ -434,6 +451,59 @@ function hasLegacyChannelDesignSignals(document) {
         }
     }
     return matches >= 2;
+}
+
+function hasDeterministicLegacyMapping(document) {
+    if (!CHANNEL_PROFILE || CHANNEL_PROFILE.profile_id !== "legacy-v1") {
+        return false;
+    }
+    var requiredTextNames = ["卖点", "规格", "到手", "价格1", "价格2"];
+    for (var textIndex = 0; textIndex < requiredTextNames.length; textIndex++) {
+        if (findNamedLayers(document, "@" + requiredTextNames[textIndex]).length !== 1) {
+            return false;
+        }
+    }
+    var activityCount = findNamedLayers(document, "@活动时间").length + findNamedLayers(document, "@时间").length;
+    if (activityCount !== 1) {
+        return false;
+    }
+    var productCandidates = findProductCandidates(document);
+    return productCandidates.length === 1;
+}
+
+function prepareLegacyPackageLayers(document) {
+    var packageGroups = [];
+    var groupNames = ["新旧包装", "新旧", "#新旧", "#新旧包装"];
+    for (var groupNameIndex = 0; groupNameIndex < groupNames.length; groupNameIndex++) {
+        var matches = findNamedLayers(document, groupNames[groupNameIndex]);
+        for (var matchIndex = 0; matchIndex < matches.length; matchIndex++) {
+            var group = matches[matchIndex];
+            if (group.typename !== "LayerSet") { continue; }
+            var alreadyAdded = false;
+            for (var addedIndex = 0; addedIndex < packageGroups.length; addedIndex++) {
+                if (packageGroups[addedIndex] === group) {
+                    alreadyAdded = true;
+                    break;
+                }
+            }
+            if (!alreadyAdded) { packageGroups.push(group); }
+        }
+    }
+    for (var packageIndex = 0; packageIndex < packageGroups.length; packageIndex++) {
+        var packageGroup = packageGroups[packageIndex];
+        packageGroup.name = "#展示新旧包装";
+        var layers = [];
+        descendants(packageGroup, layers);
+        for (var layerIndex = 0; layerIndex < layers.length; layerIndex++) {
+            var layer = layers[layerIndex];
+            var name = trimText(layer.name);
+            if (name === "!DT17090-24旧" || name === "DT17090-24旧" || name === "旧包装图") {
+                convertToSmartObject(document, layer, "旧包装图");
+            } else if (name === "夏季新旧包装底" || name === "官宣新旧包装底" || name === "新旧包装底图") {
+                convertToSmartObject(document, layer, "新旧包装底图");
+            }
+        }
+    }
 }
 
 function profileRequiredVariable(name) {
@@ -511,6 +581,14 @@ function inspectPreparation(document, layerIndex) {
 
     if (profileBindingsAreUsable(document)) {
         return { status: "NEEDS_PREP", message: "已识别当前渠道模板图层映射，将生成套版模板副本。" };
+    }
+
+    // The first JD template generation used stable visual groups plus a small
+    // set of legacy aliases (for example @时间 and !堆图). When all required
+    // content has exactly one candidate, that mapping is deterministic even if
+    // the PSD also contains 产品/时间 design groups.
+    if (hasDeterministicLegacyMapping(document)) {
+        return { status: "NEEDS_PREP", message: "已识别京东旧版模板的唯一字段映射，将生成套版模板副本。" };
     }
 
     if (hasLegacyChannelDesignSignals(document)) {
@@ -816,12 +894,7 @@ function prepareTemplate(document, inspection, layerIndex) {
             couponGroups[couponIndex].name = "#优惠券开关";
         }
     }
-    var packageGroups = findNamedLayers(document, "新旧包装").concat(findNamedLayers(document, "新旧"));
-    for (var packageIndex = 0; packageIndex < packageGroups.length; packageIndex++) {
-        if (packageGroups[packageIndex].typename === "LayerSet") {
-            packageGroups[packageIndex].name = "#展示新旧包装";
-        }
-    }
+    prepareLegacyPackageLayers(document);
 
     var problems = templateProblems(document);
     if (problems.length > 0) {

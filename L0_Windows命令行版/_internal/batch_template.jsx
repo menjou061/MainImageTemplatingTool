@@ -6,7 +6,9 @@
  */
 
 var REPORT_NAME = "结果报告.csv";
-var PRODUCT_VERTICAL_OFFSET_PX = 32;
+// Keep the product inside the designer's smart-object frame.  The 94% inset
+// leaves the PSD safety margin visible while still filling the usable area.
+var PRODUCT_SAFE_SCALE = 0.94;
 var CONTINUE_WITH_PREFLIGHT_ISSUES = !!($.global.__BATCH_INPUTS__ && $.global.__BATCH_INPUTS__.continueWithPreflightIssues);
 var CHANNEL_PROFILE = ($.global.__BATCH_INPUTS__ && $.global.__BATCH_INPUTS__.profile) || null;
 var ACTIVE_LAYOUT_GROUP = null;
@@ -28,10 +30,41 @@ function isDisabledImageValue(value) {
     return normalized === "无" || normalized === "无.png" || normalized === "none" || normalized === "null";
 }
 
-function isRequiredTextKey(key) {
+function isOptionalProfileKey(key) {
+    if (!CHANNEL_PROFILE || !CHANNEL_PROFILE.optional_psd_variables) {
+        return false;
+    }
+    for (var index = 0; index < CHANNEL_PROFILE.optional_psd_variables.length; index++) {
+        if (String(CHANNEL_PROFILE.optional_psd_variables[index]) === String(key)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function dataFieldsOptional() {
+    return !!(CHANNEL_PROFILE && CHANNEL_PROFILE.data_fields_optional);
+}
+
+function isProfileTextKey(key) {
+    if (CHANNEL_PROFILE && CHANNEL_PROFILE.required_psd_variables) {
+        for (var index = 0; index < CHANNEL_PROFILE.required_psd_variables.length; index++) {
+            var required = CHANNEL_PROFILE.required_psd_variables[index];
+            if (required.type === "text" && String(required.name) === String(key)) {
+                return true;
+            }
+        }
+    }
     return key === "折扣" || key === "券名" || key === "券门槛" ||
         key === "活动时间" || key === "到手" || key === "价格1" ||
         key === "价格2" || key === "卖点" || key === "规格";
+}
+
+function isRequiredTextKey(key) {
+    if (isOptionalProfileKey(key) || dataFieldsOptional()) {
+        return false;
+    }
+    return isProfileTextKey(key);
 }
 
 function getBasename(value) {
@@ -223,6 +256,12 @@ function addIssue(result, issue) {
     result.issues.push(issue);
 }
 
+function addDataPrecheckWarning(result, issue) {
+    result.preflightIssue = true;
+    addCode(result, "W_DATA_PRECHECK");
+    addIssue(result, issue + "；已按表格内容继续生成");
+}
+
 function addCode(result, code) {
     for (var index = 0; index < result.codes.length; index++) {
         if (result.codes[index] === code) {
@@ -282,8 +321,12 @@ function findDocumentVariable(document, name) {
     return null;
 }
 
+function isOptionalProfileVariable(required) {
+    return isOptionalProfileKey(required && required.name);
+}
+
 function priceValidationError(record) {
-    if (CHANNEL_PROFILE && CHANNEL_PROFILE.layout === "record_rows") {
+    if (dataFieldsOptional() || (CHANNEL_PROFILE && CHANNEL_PROFILE.layout === "record_rows")) {
         return "";
     }
     var price1 = trimText(record["价格1"]);
@@ -359,13 +402,18 @@ function selectRecordLayout(document, record) {
 }
 
 function applyPreflightIssue(record, result) {
-    var issue = trimText(record["预检异常"]);
-    if (isBlank(issue)) {
-        return;
+    var errors = trimText(record["预检异常"]);
+    var warnings = trimText(record["预检提醒"]);
+    if (!isBlank(errors)) {
+        result.preflightIssue = true;
+        addCode(result, "W_DATA_PRECHECK");
+        addIssue(result, "清洗预检异常：" + errors);
     }
-    result.preflightIssue = true;
-    addCode(result, "W_DATA_PRECHECK");
-    addIssue(result, "清洗预检：" + issue);
+    if (!isBlank(warnings)) {
+        result.preflightIssue = true;
+        addCode(result, "W_DATA_PRECHECK");
+        addIssue(result, "清洗预检提醒：" + warnings);
+    }
 }
 
 function addLayers(container, layerIndex) {
@@ -436,6 +484,9 @@ function requiredBindingErrors(container, profile, scope) {
         var required = profile.required_psd_variables[index];
         var collection = required.type === "text" ? layerIndex.text : layerIndex.image;
         if (!collection[required.name] || collection[required.name].length === 0) {
+            if (isOptionalProfileVariable(required)) {
+                continue;
+            }
             errors.push("E_VAR_UNBOUND: " + scope + required.name + " 未绑定到 " + (required.type === "text" ? "@文本层" : "!智能对象"));
             continue;
         }
@@ -831,7 +882,9 @@ function setTextLayer(layer, value, key, record, result) {
         if (key === "备注") {
             layer.visible = false;
         }
-        if (isRequiredTextKey(key)) {
+        if (dataFieldsOptional() && isProfileTextKey(key)) {
+            addDataPrecheckWarning(result, "字段为空：" + key);
+        } else if (isRequiredTextKey(key)) {
             result.emptyField = true;
             addCode(result, "E_EMPTY_FIELD");
             addIssue(result, "字段为空：" + key);
@@ -850,8 +903,6 @@ function setTextLayer(layer, value, key, record, result) {
             addIssue(result, "文案已自动缩字适配：" + key);
         }
     }
-    // Other text fields retain the PSD's original visual hierarchy. They are
-    // reported for design review instead of being resized automatically.
     var textRect = layerRect(layer);
     var maxWidth = textMaxWidth(layer, key, originalRect);
     var maxHeight = Math.max(1, rectHeight(originalRect) * 0.98);
@@ -915,8 +966,10 @@ function fitProductToTemplateFrame(layer, targetRect) {
     var currentRect = visiblePixelRect(layer);
     var currentWidth = currentRect.right - currentRect.left;
     var currentHeight = currentRect.bottom - currentRect.top;
-    var targetWidth = targetRect.right - targetRect.left;
-    var targetHeight = targetRect.bottom - targetRect.top;
+    var frameWidth = targetRect.right - targetRect.left;
+    var frameHeight = targetRect.bottom - targetRect.top;
+    var targetWidth = frameWidth * PRODUCT_SAFE_SCALE;
+    var targetHeight = frameHeight * PRODUCT_SAFE_SCALE;
     if (currentWidth <= 0 || currentHeight <= 0 || targetWidth <= 0 || targetHeight <= 0) {
         throw new Error("商品图展示框尺寸无效");
     }
@@ -930,7 +983,7 @@ function fitProductToTemplateFrame(layer, targetRect) {
     var targetCenterX = (targetRect.left + targetRect.right) / 2;
     var targetCenterY = (targetRect.top + targetRect.bottom) / 2;
     var shiftX = targetCenterX - currentCenterX;
-    var shiftY = targetCenterY - currentCenterY + PRODUCT_VERTICAL_OFFSET_PX;
+    var shiftY = targetCenterY - currentCenterY;
     layer.translate(UnitValue(shiftX, "px"), UnitValue(shiftY, "px"));
     return Math.abs(scale - 1) > 0.001 || Math.abs(shiftX) > 0.5 || Math.abs(shiftY) > 0.5;
 }
@@ -972,9 +1025,13 @@ function setImageLayer(layer, value, key, record, materialIndex, result) {
     }
     if (isBlank(value) || isDisabledImageValue(value)) {
         if (key === "商品图") {
-            result.emptyField = true;
-            addCode(result, "E_EMPTY_FIELD");
-            addIssue(result, "字段为空：商品图");
+            if (dataFieldsOptional()) {
+                addDataPrecheckWarning(result, "字段为空：商品图");
+            } else {
+                result.emptyField = true;
+                addCode(result, "E_EMPTY_FIELD");
+                addIssue(result, "字段为空：商品图");
+            }
             layer.visible = false;
         } else {
             layer.visible = false;
@@ -991,9 +1048,13 @@ function setImageLayer(layer, value, key, record, materialIndex, result) {
     var imageFile = findMaterial(value, materialIndex);
     if (!imageFile) {
         if (key === "商品图") {
-            result.missingImage = true;
-            addCode(result, "E_MISSING_IMAGE");
-            addIssue(result, "缺图：商品图=" + value);
+            if (dataFieldsOptional()) {
+                addDataPrecheckWarning(result, "缺图：商品图=" + value);
+            } else {
+                result.missingImage = true;
+                addCode(result, "E_MISSING_IMAGE");
+                addIssue(result, "缺图：商品图=" + value);
+            }
             layer.visible = false;
         } else {
             layer.visible = false;
@@ -1017,9 +1078,14 @@ function setImageLayer(layer, value, key, record, materialIndex, result) {
         }
     } catch (error) {
         if (key === "商品图") {
-            result.missingImage = true;
-            addCode(result, "E_MISSING_IMAGE");
-            addIssue(result, "替换失败：商品图=" + imageFile.name + "（" + error.message + "）");
+            if (dataFieldsOptional()) {
+                addDataPrecheckWarning(result, "替换失败：商品图=" + imageFile.name + "（" + error.message + "）");
+                layer.visible = false;
+            } else {
+                result.missingImage = true;
+                addCode(result, "E_MISSING_IMAGE");
+                addIssue(result, "替换失败：商品图=" + imageFile.name + "（" + error.message + "）");
+            }
         } else {
             layer.visible = false;
             result.optionalImageMissing = true;
@@ -1039,6 +1105,16 @@ function applyRecord(document, record, materialIndex, result) {
     selectRecordLayout(document, record);
     var layerIndex = { text: {}, image: {}, switches: {} };
     addLayers(ACTIVE_LAYOUT_GROUP || document, layerIndex);
+    var bindingErrors = recordBindingErrors(layerIndex, record);
+    if (bindingErrors.length) {
+        result.templateInvalid = true;
+        addCode(result, "E_VAR_UNBOUND");
+        for (var bindingIndex = 0; bindingIndex < bindingErrors.length; bindingIndex++) {
+            addIssue(result, bindingErrors[bindingIndex]);
+        }
+        applyPreflightIssue(record, result);
+        return;
+    }
     setSwitches(layerIndex, record, result);
 
     for (var textKey in layerIndex.text) {
@@ -1063,6 +1139,25 @@ function applyRecord(document, record, materialIndex, result) {
     applyPreflightIssue(record, result);
 }
 
+function recordBindingErrors(layerIndex, record) {
+    if (!CHANNEL_PROFILE || !CHANNEL_PROFILE.required_psd_variables) {
+        return [];
+    }
+    var errors = [];
+    for (var index = 0; index < CHANNEL_PROFILE.required_psd_variables.length; index++) {
+        var required = CHANNEL_PROFILE.required_psd_variables[index];
+        var collection = required.type === "text" ? layerIndex.text : layerIndex.image;
+        if (collection[required.name] && collection[required.name].length > 0) {
+            continue;
+        }
+        if ((isOptionalProfileVariable(required) || dataFieldsOptional()) && isBlank(record[required.name])) {
+            continue;
+        }
+        errors.push("PSD 变量缺失：" + required.name + "（当前商品有对应数据）");
+    }
+    return errors;
+}
+
 function applyPhotoshopVariables(document, record, materialIndex, result) {
     var variables = [];
     var values = [];
@@ -1084,9 +1179,13 @@ function applyPhotoshopVariables(document, record, materialIndex, result) {
         }
         if (required.type === "text") {
             if (isBlank(value)) {
-                result.emptyField = true;
-                addCode(result, "E_EMPTY_FIELD");
-                addIssue(result, "字段为空：" + required.name);
+                if (dataFieldsOptional()) {
+                    addDataPrecheckWarning(result, "字段为空：" + required.name);
+                } else {
+                    result.emptyField = true;
+                    addCode(result, "E_EMPTY_FIELD");
+                    addIssue(result, "字段为空：" + required.name);
+                }
                 continue;
             }
             variables.push(variable);
@@ -1094,9 +1193,13 @@ function applyPhotoshopVariables(document, record, materialIndex, result) {
         } else {
             var imageFile = findMaterial(value, materialIndex);
             if (!imageFile) {
-                result.missingImage = true;
-                addCode(result, isBlank(value) ? "E_EMPTY_FIELD" : "E_MISSING_IMAGE");
-                addIssue(result, isBlank(value) ? "字段为空：" + required.name : "缺图：" + required.name + "=" + value);
+                if (dataFieldsOptional()) {
+                    addDataPrecheckWarning(result, isBlank(value) ? "字段为空：" + required.name : "缺图：" + required.name + "=" + value);
+                } else {
+                    result.missingImage = true;
+                    addCode(result, isBlank(value) ? "E_EMPTY_FIELD" : "E_MISSING_IMAGE");
+                    addIssue(result, isBlank(value) ? "字段为空：" + required.name : "缺图：" + required.name + "=" + value);
+                }
                 continue;
             }
             variables.push(variable);
