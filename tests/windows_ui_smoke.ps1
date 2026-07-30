@@ -21,12 +21,32 @@ Add-Type @'
 using System;
 using System.Runtime.InteropServices;
 public static class NativeMouse {
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Point {
+        public int X;
+        public int Y;
+    }
+
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr window);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr window, int command);
+    [DllImport("user32.dll")] private static extern bool ScreenToClient(IntPtr window, ref Point point);
+    [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
     public const uint LeftDown = 0x0002;
     public const uint LeftUp = 0x0004;
+
+    public static bool ClickClientPoint(IntPtr window, int screenX, int screenY) {
+        Point point = new Point { X = screenX, Y = screenY };
+        if (!ScreenToClient(window, ref point)) return false;
+
+        const uint WmLeftButtonDown = 0x0201;
+        const uint WmLeftButtonUp = 0x0202;
+        IntPtr position = new IntPtr(unchecked((point.Y << 16) | (point.X & 0xffff)));
+        SendMessage(window, WmLeftButtonDown, new IntPtr(1), position);
+        SendMessage(window, WmLeftButtonUp, IntPtr.Zero, position);
+        return true;
+    }
 }
 '@
 
@@ -155,21 +175,53 @@ function Set-CheckedListItem {
     param([System.Windows.Automation.AutomationElement]$Item)
     if (-not $Item) { throw '未找到要勾选的商品。' }
 
-    # WinForms CheckedListBox exposes selection and check state separately.
-    # SelectionItemPattern.Select() only paints the row highlight, so use the
-    # checkbox hit area and validate the accessible checked state afterwards.
+    $legacyPatternObject = $null
+    if (-not $Item.TryGetCurrentPattern(
+        [System.Windows.Automation.LegacyIAccessiblePattern]::Pattern,
+        [ref]$legacyPatternObject
+    )) {
+        throw '商品列表项未提供 LegacyIAccessiblePattern，无法验证勾选状态。'
+    }
+    $legacyPattern = [System.Windows.Automation.LegacyIAccessiblePattern]$legacyPatternObject
+    $legacyState = [int]($legacyPattern.Current.State)
+    if (($legacyState -band 0x10) -ne 0) {
+        Write-SmokeLog ("商品复选框已勾选，可访问性状态：0x{0:X}" -f $legacyState)
+        return
+    }
+
+    # CheckedListBox keeps selection and check state separately. Send a click
+    # directly to the list HWND so the action does not depend on focus or the
+    # keyboard state, then verify the item's MSAA checked bit.
     $rectangle = $Item.Current.BoundingRectangle
     if ($rectangle.Width -le 0 -or $rectangle.Height -le 0) {
         throw '商品复选框不可见，无法勾选。'
     }
-    [void][NativeMouse]::SetCursorPos([int]($rectangle.X + 8), [int]($rectangle.Y + ($rectangle.Height / 2)))
-    [NativeMouse]::mouse_event([NativeMouse]::LeftDown, 0, 0, 0, [UIntPtr]::Zero)
-    [NativeMouse]::mouse_event([NativeMouse]::LeftUp, 0, 0, 0, [UIntPtr]::Zero)
-    Start-Sleep -Milliseconds 500
 
-    $legacyState = [int]$Item.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::LegacyIAccessibleStateProperty)
-    # STATE_SYSTEM_CHECKED is 0x10. Keep the raw state in the log so a future
-    # Windows accessibility-provider change remains diagnosable.
+    $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+    $list = $walker.GetParent($Item)
+    if (-not $list -or $list.Current.ControlType -ne [System.Windows.Automation.ControlType]::List) {
+        throw '无法定位商品复选列表控件。'
+    }
+    $listHandle = [IntPtr]$list.Current.NativeWindowHandle
+    if ($listHandle -eq [IntPtr]::Zero) {
+        throw '商品复选列表没有可用的原生窗口句柄。'
+    }
+    if (-not [NativeMouse]::ClickClientPoint(
+        $listHandle,
+        [int]($rectangle.X + 8),
+        [int]($rectangle.Y + ($rectangle.Height / 2))
+    )) {
+        throw '商品复选框坐标转换失败。'
+    }
+
+    $deadline = (Get-Date).AddSeconds(2)
+    do {
+        Start-Sleep -Milliseconds 100
+        $legacyState = [int]($legacyPattern.Current.State)
+        if (($legacyState -band 0x10) -ne 0) { break }
+    } while ((Get-Date) -lt $deadline)
+
+    # STATE_SYSTEM_CHECKED is 0x10. Retain the raw provider state for diagnosis.
     Write-SmokeLog ("商品复选框可访问性状态：0x{0:X}" -f $legacyState)
     if (($legacyState -band 0x10) -eq 0) {
         throw '商品未进入已勾选状态。'
