@@ -59,6 +59,21 @@ class HygieneTemplatePreparationTest(unittest.TestCase):
         self.assertNotIn("addAllLayers(document, all)", report)
         self.assertIn("仅处理本次任务版式", report)
 
+    def test_prepared_task_copy_removes_layouts_not_used_by_selected_rows(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn("function inactiveHygieneLayouts(document, layerIndex)", source)
+        self.assertIn("function removeInactiveHygieneLayouts(document, layerIndex)", source)
+        self.assertIn("inactive[index].layer.remove()", source)
+        self.assertIn('status: "NEEDS_ISOLATION"', source)
+        removal = source.index("var removedLayouts = removeInactiveHygieneLayouts(document")
+        mapping = source.index("prepareHygieneTemplate(document, buildLayerIndex(document))")
+        save = source.index("document.saveAs(outputFile")
+        self.assertLess(removal, mapping)
+        self.assertLess(removal, save)
+        self.assertIn("未使用版式已从任务副本移除，原始 PSD 未修改", source)
+        self.assertIn('inspection.status === "NEEDS_PREP" ? "建立图层映射" : "保留已通过体检的字段映射"', source)
+
 
 if __name__ == "__main__":
     unittest.main()
