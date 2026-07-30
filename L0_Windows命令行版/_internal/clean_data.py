@@ -116,6 +116,11 @@ def looks_like_vertical_header(value: Any) -> bool:
 
 
 def is_vertical_layout(ws) -> bool:
+    headers = {as_text(ws.cell(1, column).value) for column in range(1, ws.max_column + 1)}
+    if "文件名称" in headers and any(
+        header in headers for header in ("产品（精确到图片名）", "产品图路径", "图片目录路径")
+    ):
+        return ws.max_row >= 2 and ws.max_column >= 2
     row_score = sum(
         1
         for column in range(1, ws.max_column + 1)
@@ -722,7 +727,14 @@ def build_data(
             if variable.get("type") == "pixel_replacement"
         }
     else:
-        required_fields = REQUIRED_RECORD_FIELDS if layout == "horizontal" else {"预估到手价", "卖点", "规格"}
+        if layout == "horizontal":
+            required_fields = REQUIRED_RECORD_FIELDS
+        else:
+            required_fields = {
+                variable["name"]
+                for variable in profile.get("required_psd_variables", [])
+                if variable.get("type") == "text"
+            } or {"预估到手价", "卖点", "规格"}
         required_image_fields = {
             variable["name"]
             for variable in profile.get("required_psd_variables", [])
