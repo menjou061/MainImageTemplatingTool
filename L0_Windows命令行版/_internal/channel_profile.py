@@ -55,6 +55,12 @@ def get_profile(profile_id: str | None, variant: str | None = None, *, require_e
     for key in ("export_size", "sheet_name", "template_bindings", "output_label"):
         if key in selected_variant_config:
             result[key] = selected_variant_config[key]
+    # Some channels keep one menu entry while their 750/800 PSDs expose
+    # different fields. Apply those variant-specific contracts before
+    # preflight and template preparation run.
+    for key in ("required_psd_variables", "mapping", "sheet", "text_fit", "ignored_headers"):
+        if key in selected_variant_config:
+            result[key] = selected_variant_config[key]
     return result
 
 def validate_vertical_schema(headers: list[str], profile: dict[str, Any]) -> None:

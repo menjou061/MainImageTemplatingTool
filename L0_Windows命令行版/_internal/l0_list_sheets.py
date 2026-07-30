@@ -70,6 +70,11 @@ def is_vertical_layout(worksheet) -> bool:
     keeps ordinary product names from being mistaken for a schema.
     """
     max_row, max_column = ensure_dimensions(worksheet)
+    headers = {as_text(worksheet.cell(1, column).value) for column in range(1, max_column + 1)}
+    if "文件名称" in headers and any(
+        header in headers for header in ("产品（精确到图片名）", "产品图路径", "图片目录路径")
+    ):
+        return max_row >= 2 and max_column >= 2
     row_score = sum(
         1
         for column in range(1, max_column + 1)

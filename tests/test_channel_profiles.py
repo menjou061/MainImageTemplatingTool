@@ -63,6 +63,32 @@ class ChannelProfileTest(unittest.TestCase):
         profile = get_profile("legacy-v1", require_enabled=False)
         self.assertEqual(get_variant_for_sheet(profile, "任意可见 Sheet"), "main-800")
 
+    def test_hengan_lifestyle_maps_real_sheets_and_sizes(self) -> None:
+        profile = get_profile("hengan-lifestyle-v1", require_enabled=False)
+        headers = [
+            "文件名称",
+            "规格",
+            "利益点(最下面的)",
+            "卖点(堆图上面那行卖点)",
+            "预估到手价",
+            "价格1",
+            "价格2",
+            "产品（精确到图片名）",
+        ]
+        mapping = map_vertical_headers(headers, profile)
+        self.assertEqual(mapping["文件名称"], "商品文件名")
+        self.assertEqual(mapping["产品（精确到图片名）"], "产品")
+        hengan750 = get_profile("hengan-lifestyle-v1", "main-750", require_enabled=False)
+        hengan800 = get_profile("hengan-lifestyle-v1", "main-800", require_enabled=False)
+        self.assertEqual(get_variant_for_sheet(profile, "750版新"), "main-750")
+        self.assertEqual(get_variant_for_sheet(profile, "抽纸新"), "main-800")
+        self.assertEqual(hengan750["target_size"], {"width": 1440, "height": 1920})
+        self.assertEqual(hengan800["target_size"], {"width": 1440, "height": 1440})
+        self.assertIn("卖点", {item["name"] for item in hengan750["required_psd_variables"]})
+        self.assertNotIn("卖点", {item["name"] for item in hengan800["required_psd_variables"]})
+        self.assertEqual(hengan750["template_bindings"]["价格1"], "30")
+        self.assertEqual(hengan800["template_bindings"]["价格1"], "15")
+
     def test_hygiene_tmall_profile_uses_the_record_row_contract(self) -> None:
         profile = get_profile("hygiene-tmall-v1.2")
         self.assertEqual(profile["layout"], "record_rows")
@@ -90,6 +116,7 @@ class ChannelProfileTest(unittest.TestCase):
         self.assertEqual(len(combinations), len(set(combinations)))
         self.assertIn(("纸品", "京东自营"), combinations)
         self.assertIn(("纸品", "天猫官旗"), combinations)
+        self.assertIn(("纸品", "恒安生活馆"), combinations)
         self.assertIn(("卫品", "天猫官旗"), combinations)
 
 
