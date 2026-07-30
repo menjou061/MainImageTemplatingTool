@@ -59,7 +59,7 @@ class HygieneTemplatePreparationTest(unittest.TestCase):
         self.assertNotIn("addAllLayers(document, all)", report)
         self.assertIn("仅处理本次任务版式", report)
 
-    def test_prepared_task_copy_removes_layouts_not_used_by_selected_rows(self) -> None:
+    def test_multi_layout_source_requires_prepared_copy(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
 
         self.assertIn("function inactiveHygieneLayouts(document, layerIndex)", source)
