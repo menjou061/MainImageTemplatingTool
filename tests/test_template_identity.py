@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -47,6 +49,30 @@ class TemplateIdentityTest(unittest.TestCase):
             psd.write_bytes(b"wrong psd with an extra layer")
             with self.assertRaisesRegex(TemplateIdentityError, "E_TEMPLATE_IDENTITY_MISMATCH"):
                 validate_template_identity(psd, "legacy-v1", "main-800")
+
+    def test_absolute_script_invocation_can_import_sibling_profile_module(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            psd = self._approved_template(Path(name))
+            environment = os.environ.copy()
+            environment.pop("PYTHONPATH", None)
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(INTERNAL / "template_identity.py"),
+                    "--psd",
+                    str(psd),
+                    "--profile",
+                    "legacy-v1",
+                    "--variant",
+                    "main-800",
+                ],
+                cwd=name,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":

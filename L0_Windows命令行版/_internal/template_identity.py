@@ -13,6 +13,12 @@ import json
 import sys
 from pathlib import Path
 
+# The embedded Windows runtime uses ``python311._pth`` and does not add the
+# script directory to ``sys.path`` when this file is invoked by absolute path.
+SCRIPT_DIR = str(Path(__file__).resolve().parent)
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
+
 from channel_profile import ProfileError, get_profile
 
 
