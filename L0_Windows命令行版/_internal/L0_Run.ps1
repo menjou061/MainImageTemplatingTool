@@ -1868,12 +1868,20 @@ function Invoke-PhotoshopJavaScript {
     if ($progIds.Count -eq 0) {
         throw 'E_PHOTOSHOP_UNAVAILABLE：未找到 Photoshop COM ProgID。'
     }
+    # PowerShell serializes the generic ProgID list as one nested object when
+    # passed directly to a background job. Use a scalar payload and rebuild the
+    # list inside the child process so each COM ProgID stays distinct.
+    $progIdPayload = (($progIds | ForEach-Object { [string]$_ }) -join "`n")
     $job = $null
     try {
         $job = Start-Job -ScriptBlock {
-            param($candidateProgIds, $jsx)
+            param([string]$candidateProgIdPayload, [string]$jsx)
             $lastError = ''
-            foreach ($candidateProgId in @($candidateProgIds)) {
+            $candidateProgIds = @(
+                ($candidateProgIdPayload -split "`n") |
+                    Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+            )
+            foreach ($candidateProgId in $candidateProgIds) {
                 try {
                     $app = New-Object -ComObject $candidateProgId -ErrorAction Stop
                     try {
@@ -1886,7 +1894,7 @@ function Invoke-PhotoshopJavaScript {
                 }
             }
             throw "DoJavaScript 调用失败：$lastError"
-        } -ArgumentList (,$progIds), $ScriptText -ErrorAction Stop
+        } -ArgumentList $progIdPayload, $ScriptText -ErrorAction Stop
         $deadline = (Get-Date).AddSeconds($timeout)
         while ($job.State -eq 'Running' -and (Get-Date) -lt $deadline) {
             Wait-Job -Job $job -Timeout 1 | Out-Null

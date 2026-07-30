@@ -39,6 +39,19 @@ class WindowsOutputGuardTest(unittest.TestCase):
             save_source,
         )
 
+    def test_photoshop_job_receives_scalar_progid_payload(self) -> None:
+        self.assertIn(
+            '$progIdPayload = (($progIds | ForEach-Object { [string]$_ }) -join "`n")',
+            self.source,
+        )
+        self.assertIn(
+            'param([string]$candidateProgIdPayload, [string]$jsx)',
+            self.source,
+        )
+        self.assertIn('$candidateProgIdPayload -split "`n"', self.source)
+        self.assertIn('-ArgumentList $progIdPayload, $ScriptText', self.source)
+        self.assertNotIn('-ArgumentList (,$progIds), $ScriptText', self.source)
+
     def test_success_path_requires_report_and_real_jpg_psd_signatures(self) -> None:
         self.assertIn("function Assert-PhotoshopOutputArtifacts", self.source)
         self.assertIn("E_OUTPUT_INCOMPLETE", self.source)
