@@ -1824,6 +1824,9 @@ try {
     if ($selectedVariant.template_bindings) {
         $selectedProfile | Add-Member -NotePropertyName template_bindings -NotePropertyValue $selectedVariant.template_bindings -Force
     }
+    if ($selectedVariant.required_psd_variables) {
+        $selectedProfile | Add-Member -NotePropertyName required_psd_variables -NotePropertyValue $selectedVariant.required_psd_variables -Force
+    }
     $profileJson = $selectedProfile | ConvertTo-Json -Depth 8 -Compress
     Add-Log "Profile：$profileId@$($selectedProfile.profile_version)，variant：$variantId，目标尺寸：$($selectedVariant.width)x$($selectedVariant.height)"
 
@@ -1883,6 +1886,7 @@ try {
         $selectedProfile | Add-Member -NotePropertyName target_size -NotePropertyValue ([pscustomobject]@{ width = $selectedVariant.width; height = $selectedVariant.height }) -Force
         if ($selectedVariant.export_size) { $selectedProfile | Add-Member -NotePropertyName export_size -NotePropertyValue $selectedVariant.export_size -Force }
         if ($selectedVariant.template_bindings) { $selectedProfile | Add-Member -NotePropertyName template_bindings -NotePropertyValue $selectedVariant.template_bindings -Force }
+        if ($selectedVariant.required_psd_variables) { $selectedProfile | Add-Member -NotePropertyName required_psd_variables -NotePropertyValue $selectedVariant.required_psd_variables -Force }
         $profileJson = $selectedProfile | ConvertTo-Json -Depth 8 -Compress
         Add-Log "按 Sheet 匹配规格：$sheetName -> $variantId（$($selectedVariant.width)x$($selectedVariant.height)）"
     }

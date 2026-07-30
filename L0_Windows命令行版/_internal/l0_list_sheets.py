@@ -47,6 +47,11 @@ def is_vertical_layout(worksheet) -> bool:
     and product IDs in column A.  Requiring at least two variable-like headers
     keeps ordinary product names from being mistaken for a schema.
     """
+    headers = {as_text(worksheet.cell(1, column).value) for column in range(1, worksheet.max_column + 1)}
+    if "文件名称" in headers and any(
+        header in headers for header in ("产品（精确到图片名）", "产品图路径", "图片目录路径")
+    ):
+        return worksheet.max_row >= 2 and worksheet.max_column >= 2
     row_score = sum(
         1
         for column in range(1, worksheet.max_column + 1)
