@@ -441,8 +441,11 @@ try {
         }
     }
 
-    $jpgFiles = @(Get-ChildItem -LiteralPath $jpgDirectory -Filter '*.jpg' -File -ErrorAction SilentlyContinue)
-    $psdFiles = @(Get-ChildItem -LiteralPath $psdDirectory -Filter '*.psd' -File -ErrorAction SilentlyContinue)
+    # Approved profiles isolate each variant below JPG成品/PSD源文件, while
+    # legacy JD keeps the files directly under those folders. Count recursively
+    # so the output gate validates both layouts without weakening file checks.
+    $jpgFiles = @(Get-ChildItem -LiteralPath $jpgDirectory -Filter '*.jpg' -File -Recurse -ErrorAction SilentlyContinue)
+    $psdFiles = @(Get-ChildItem -LiteralPath $psdDirectory -Filter '*.psd' -File -Recurse -ErrorAction SilentlyContinue)
     if ($jpgFiles.Count -ne $resultRows.Count -or $psdFiles.Count -ne $resultRows.Count) {
         throw "成品数与结果报告不一致：结果=$($resultRows.Count)，JPG=$($jpgFiles.Count)，PSD=$($psdFiles.Count)"
     }
