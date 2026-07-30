@@ -382,18 +382,15 @@ function Assert-PhotoshopOutputArtifacts {
         throw "E_OUTPUT_INCOMPLETE：结果报告没有商品记录：$ResultReport"
     }
     $successRows = @($rows | Where-Object { [string]$_.状态 -eq '成功' })
-    if ($successRows.Count -eq 0) {
-        $rowsWithOutput = @($rows | Where-Object {
-            -not [string]::IsNullOrWhiteSpace([string]$_.输出文件) -or
-            -not [string]::IsNullOrWhiteSpace([string]$_.输出PSD)
-        })
-        if ($rowsWithOutput.Count -eq 0) {
-            throw "E_OUTPUT_INCOMPLETE：结果报告没有任何 JPG/PSD 产物记录：$ResultReport"
-        }
-        return [pscustomobject]@{ SuccessCount = 0; CheckedCount = 0 }
+    $rowsWithOutput = @($rows | Where-Object {
+        -not [string]::IsNullOrWhiteSpace([string]$_.输出文件) -or
+        -not [string]::IsNullOrWhiteSpace([string]$_.输出PSD)
+    })
+    if ($rowsWithOutput.Count -eq 0) {
+        throw "E_OUTPUT_INCOMPLETE：结果报告没有任何 JPG/PSD 产物记录：$ResultReport"
     }
     $checked = 0
-    foreach ($row in $successRows) {
+    foreach ($row in $rowsWithOutput) {
         $jpgPath = [string]$row.输出文件
         $psdPath = [string]$row.输出PSD
         if ([string]::IsNullOrWhiteSpace($jpgPath) -or [string]::IsNullOrWhiteSpace($psdPath)) {
@@ -411,8 +408,8 @@ function Assert-PhotoshopOutputArtifacts {
     }
     $jpgCount = @(Get-ChildItem -LiteralPath $JpgOutputDir -Filter '*.jpg' -File -ErrorAction SilentlyContinue).Count
     $psdCount = @(Get-ChildItem -LiteralPath $PsdOutputDir -Filter '*.psd' -File -ErrorAction SilentlyContinue).Count
-    if ($jpgCount -lt $successRows.Count -or $psdCount -lt $successRows.Count) {
-        throw "E_OUTPUT_INCOMPLETE：结果报告成功 $($successRows.Count) 条，但 JPG/PSD 产物数量为 $jpgCount/$psdCount。"
+    if ($jpgCount -lt $rowsWithOutput.Count -or $psdCount -lt $rowsWithOutput.Count) {
+        throw "E_OUTPUT_INCOMPLETE：结果报告有产物记录 $($rowsWithOutput.Count) 条，但 JPG/PSD 产物数量为 $jpgCount/$psdCount。"
     }
     return [pscustomobject]@{ SuccessCount = $successRows.Count; CheckedCount = $checked }
 }

@@ -29,6 +29,7 @@ class WindowsOutputGuardTest(unittest.TestCase):
     def test_success_path_requires_report_and_real_jpg_psd_signatures(self) -> None:
         self.assertIn("function Assert-PhotoshopOutputArtifacts", self.source)
         self.assertIn("E_OUTPUT_INCOMPLETE", self.source)
+        self.assertIn("$rowsWithOutput = @($rows | Where-Object", self.source)
         self.assertIn("Kind 'jpg'", self.source)
         self.assertIn("Kind 'psd'", self.source)
         self.assertIn("$bytes[0] -ne 0xFF", self.source)
