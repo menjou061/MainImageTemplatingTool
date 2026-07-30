@@ -74,6 +74,15 @@ class TemplateIdentityTest(unittest.TestCase):
             )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_powershell_utf8_bom_sidecar_is_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            psd = self._approved_template(directory)
+            sidecar = psd.with_name(psd.name + ".template.json")
+            sidecar.write_text(sidecar.read_text(encoding="utf-8"), encoding="utf-8-sig")
+            result = validate_template_identity(psd, "legacy-v1", "main-800")
+        self.assertEqual(result["template_id"], "paper-jd-self-main-800-v1")
+
 
 if __name__ == "__main__":
     unittest.main()

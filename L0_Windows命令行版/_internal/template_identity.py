@@ -51,7 +51,9 @@ def validate_template_identity(psd_path: Path, profile_id: str, variant: str) ->
     if not sidecar.is_file():
         raise TemplateIdentityError("E_TEMPLATE_IDENTITY_MISSING", f"缺少批准模板身份文件：{sidecar.name}")
     try:
-        manifest = json.loads(sidecar.read_text(encoding="utf-8"))
+        # Windows PowerShell 5.1's UTF8 Set-Content emits a BOM. Accept it
+        # while still requiring strict JSON and the full identity contract.
+        manifest = json.loads(sidecar.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError) as error:
         raise TemplateIdentityError("E_TEMPLATE_IDENTITY_INVALID", f"无法读取模板身份文件：{error}") from error
     expected = {
