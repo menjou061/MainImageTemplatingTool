@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 INTERNAL = ROOT / "L0_Windows命令行版" / "_internal"
 sys.path.insert(0, str(INTERNAL))
 
-from channel_profile import ProfileError, get_profile, get_variant_for_sheet, map_vertical_headers
+from channel_profile import ProfileError, get_profile, get_variant_for_sheet, load_profiles, map_vertical_headers
 
 
 class ChannelProfileTest(unittest.TestCase):
@@ -88,6 +88,36 @@ class ChannelProfileTest(unittest.TestCase):
         self.assertNotIn("卖点", {item["name"] for item in hengan800["required_psd_variables"]})
         self.assertEqual(hengan750["template_bindings"]["价格1"], "30")
         self.assertEqual(hengan800["template_bindings"]["价格1"], "15")
+
+    def test_hygiene_tmall_profile_uses_the_record_row_contract(self) -> None:
+        profile = get_profile("hygiene-tmall-v1.2")
+        self.assertEqual(profile["layout"], "record_rows")
+        self.assertEqual(profile["target_size"], {"width": 750, "height": 1000})
+        self.assertEqual(profile["output_label"], "750")
+        self.assertEqual(profile["category"], "卫品")
+        self.assertEqual(profile["channel"], "天猫官旗")
+        self.assertIn("输出文件名", profile["sheet"]["required_headers"])
+        self.assertTrue(any("备注" in headers for headers in profile["sheet"]["required_header_sets"]))
+        self.assertNotIn("价格优惠券", profile["record_required_fields"])
+        self.assertIn("小马无侧边", profile["record_layout"]["groups"])
+        self.assertEqual(profile["variant_selection"], "sheet")
+        self.assertNotIn("batch_variants", profile)
+        self.assertEqual(get_variant_for_sheet(profile, "出图数据"), "main-750")
+        self.assertNotIn("main-800", profile["variants"])
+        self.assertEqual(profile["pending_variants"]["main-800"]["status"], "pending_asset_approval")
+        with self.assertRaisesRegex(ProfileError, "E_PROFILE_SHEET_MISMATCH"):
+            get_variant_for_sheet(profile, "卫品-800")
+
+    def test_enabled_category_channel_combinations_are_complete_and_unique(self) -> None:
+        enabled = [profile for profile in load_profiles().values() if profile["status"] == "enabled"]
+        combinations = [(profile.get("category"), profile.get("channel")) for profile in enabled]
+        self.assertNotIn((None, None), combinations)
+        self.assertTrue(all(category and channel for category, channel in combinations))
+        self.assertEqual(len(combinations), len(set(combinations)))
+        self.assertIn(("纸品", "京东自营"), combinations)
+        self.assertIn(("纸品", "天猫官旗"), combinations)
+        self.assertIn(("纸品", "恒安生活馆"), combinations)
+        self.assertIn(("卫品", "天猫官旗"), combinations)
 
 
 if __name__ == "__main__":

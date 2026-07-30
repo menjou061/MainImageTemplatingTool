@@ -9,6 +9,7 @@ var REPORT_NAME = "结果报告.csv";
 var PRODUCT_VERTICAL_OFFSET_PX = 32;
 var CONTINUE_WITH_PREFLIGHT_ISSUES = !!($.global.__BATCH_INPUTS__ && $.global.__BATCH_INPUTS__.continueWithPreflightIssues);
 var CHANNEL_PROFILE = ($.global.__BATCH_INPUTS__ && $.global.__BATCH_INPUTS__.profile) || null;
+var ACTIVE_LAYOUT_GROUP = null;
 
 function trimText(value) {
     return String(value == null ? "" : value).replace(/^\s+|\s+$/g, "");
@@ -180,6 +181,7 @@ function findMaterial(value, materialIndex) {
     if (isBlank(value)) {
         return null;
     }
+    var rawValue = String(value);
     // data.csv preserves the absolute UNC path stored in Excel.  Prefer it
     // directly so the task never walks an entire shared drive to find a file.
     try {
@@ -192,8 +194,29 @@ function findMaterial(value, materialIndex) {
             return normalizedFile;
         }
     } catch (directError) {}
+    // An absolute path that cannot be opened must not fall back to a
+    // same-named file from a material folder. That fallback can silently
+    // replace a requested stack image with another product asset.
+    if (isAbsoluteMaterialPath(rawValue)) {
+        return null;
+    }
     var key = decodedName(getBasename(value)).toLowerCase();
     return materialIndex ? (materialIndex[key] || null) : null;
+}
+
+function isAbsoluteMaterialPath(value) {
+    var text = trimText(value);
+    if (text.length === 0) {
+        return false;
+    }
+    var first = text.charAt(0);
+    var second = text.charAt(1);
+    var third = text.charAt(2);
+    if (first === "/" || (first === "\\" && second === "\\")) {
+        return true;
+    }
+    var upper = first.toUpperCase();
+    return upper >= "A" && upper <= "Z" && second === ":" && (third === "\\" || third === "/");
 }
 
 function addIssue(result, issue) {
@@ -260,12 +283,79 @@ function findDocumentVariable(document, name) {
 }
 
 function priceValidationError(record) {
+    if (CHANNEL_PROFILE && CHANNEL_PROFILE.layout === "record_rows") {
+        return "";
+    }
     var price1 = trimText(record["价格1"]);
     var price2 = trimText(record["价格2"]);
     if (isBlank(price1) || isBlank(price2)) {
         return "价格1、价格2必须完整填写";
     }
     return "";
+}
+
+function collectRecordLayoutMatches(container, configured, matches) {
+    for (var layerIndex = 0; layerIndex < container.layers.length; layerIndex++) {
+        var layer = container.layers[layerIndex];
+        for (var groupIndex = 0; groupIndex < configured.length; groupIndex++) {
+            if (layer.name === configured[groupIndex]) {
+                matches[groupIndex].push(layer);
+            }
+        }
+        if (layer.typename === "LayerSet") {
+            collectRecordLayoutMatches(layer, configured, matches);
+        }
+    }
+}
+
+function selectRecordLayout(document, record) {
+    if (!CHANNEL_PROFILE || CHANNEL_PROFILE.layout !== "record_rows") {
+        ACTIVE_LAYOUT_GROUP = null;
+        return;
+    }
+    var configured = CHANNEL_PROFILE.record_layout && CHANNEL_PROFILE.record_layout.groups;
+    var selectedName = trimText(record["版式组"]);
+    ACTIVE_LAYOUT_GROUP = null;
+    if (!configured || configured.length === 0 || !selectedName) {
+        throw new Error("E_CONFIG_MISMATCH: 卫品记录缺少版式组");
+    }
+
+    var selectedIndex = -1;
+    var configuredMatches = [];
+    for (var configIndex = 0; configIndex < configured.length; configIndex++) {
+        configuredMatches.push([]);
+        if (trimText(configured[configIndex]) === selectedName) {
+            if (selectedIndex >= 0) {
+                throw new Error("E_CONFIG_MISMATCH: 渠道配置中版式组重复 " + selectedName);
+            }
+            selectedIndex = configIndex;
+        }
+    }
+    if (selectedIndex < 0) {
+        throw new Error("E_CONFIG_MISMATCH: 版式组未在渠道配置中声明 " + selectedName);
+    }
+
+    collectRecordLayoutMatches(document, configured, configuredMatches);
+    var selectedMatches = configuredMatches[selectedIndex];
+    if (selectedMatches.length === 0) {
+        throw new Error("E_CONFIG_MISMATCH: 模板没有版式组 " + configured[selectedIndex]);
+    }
+    if (selectedMatches.length > 1) {
+        throw new Error("E_CONFIG_MISMATCH: 模板版式组重复 " + configured[selectedIndex] + "（找到 " + selectedMatches.length + " 个）");
+    }
+    if (selectedMatches[0].typename !== "LayerSet") {
+        throw new Error("E_CONFIG_MISMATCH: 模板版式组不是图层组 " + configured[selectedIndex]);
+    }
+
+    for (var matchIndex = 0; matchIndex < configuredMatches.length; matchIndex++) {
+        for (var layerMatchIndex = 0; layerMatchIndex < configuredMatches[matchIndex].length; layerMatchIndex++) {
+            if (configuredMatches[matchIndex][layerMatchIndex].typename === "LayerSet") {
+                configuredMatches[matchIndex][layerMatchIndex].visible = false;
+            }
+        }
+    }
+    selectedMatches[0].visible = true;
+    ACTIVE_LAYOUT_GROUP = selectedMatches[0];
 }
 
 function applyPreflightIssue(record, result) {
@@ -431,7 +521,7 @@ function groupHasAllImageValues(group, record) {
             if (isBlank(imageValue) || isDisabledImageValue(imageValue)) {
                 return false;
             }
-        } else if (child.typename === "LayerSet" && !startsWith(child.name, "#")) {
+        } else if (child.typename === "LayerSet" && !startsWith(child.name, "#") && groupContainsImageLayer(child)) {
             if (!groupHasAllImageValues(child, record)) {
                 return false;
             }
@@ -439,6 +529,19 @@ function groupHasAllImageValues(group, record) {
         }
     }
     return foundImage;
+}
+
+function groupContainsImageLayer(group) {
+    for (var index = 0; index < group.layers.length; index++) {
+        var child = group.layers[index];
+        if (startsWith(child.name, "!")) {
+            return true;
+        }
+        if (child.typename === "LayerSet" && !startsWith(child.name, "#") && groupContainsImageLayer(child)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 function groupHasAllReplacedImageLayers(group, result) {
@@ -450,7 +553,7 @@ function groupHasAllReplacedImageLayers(group, result) {
             if (!result.optionalImageReplaced[child.name.substring(1)]) {
                 return false;
             }
-        } else if (child.typename === "LayerSet" && !startsWith(child.name, "#")) {
+        } else if (child.typename === "LayerSet" && !startsWith(child.name, "#") && groupContainsImageLayer(child)) {
             if (!groupHasAllReplacedImageLayers(child, result)) {
                 return false;
             }
@@ -642,12 +745,18 @@ function setTextLayer(layer, value, key, record, result) {
     }
     if (isBlank(value)) {
         layer.textItem.contents = "";
+        if (key === "备注") {
+            layer.visible = false;
+        }
         if (isRequiredTextKey(key)) {
             result.emptyField = true;
             addCode(result, "E_EMPTY_FIELD");
             addIssue(result, "字段为空：" + key);
         }
         return;
+    }
+    if (key === "备注") {
+        layer.visible = true;
     }
     var originalRect = layerRect(layer);
     layer.textItem.contents = String(value);
@@ -748,7 +857,7 @@ function fitOptionalImageToTemplateFrame(layer, targetRect) {
     // by the PSD designer. "Replace Contents" can reset a layer transform
     // when the replacement asset has a different canvas size, so restore the
     // original placeholder frame after every successful replacement.
-    var currentRect = layerRect(layer);
+    var currentRect = visiblePixelRect(layer);
     var currentWidth = currentRect.right - currentRect.left;
     var currentHeight = currentRect.bottom - currentRect.top;
     var targetWidth = targetRect.right - targetRect.left;
@@ -760,7 +869,7 @@ function fitOptionalImageToTemplateFrame(layer, targetRect) {
     if (Math.abs(scale - 1) > 0.001) {
         layer.resize(scale * 100, scale * 100, AnchorPosition.MIDDLECENTER);
     }
-    currentRect = layerRect(layer);
+    currentRect = visiblePixelRect(layer);
     var shiftX = (targetRect.left + targetRect.right - currentRect.left - currentRect.right) / 2;
     var shiftY = (targetRect.top + targetRect.bottom - currentRect.top - currentRect.bottom) / 2;
     layer.translate(UnitValue(shiftX, "px"), UnitValue(shiftY, "px"));
@@ -844,8 +953,9 @@ function applyRecord(document, record, materialIndex, result) {
         applyPreflightIssue(record, result);
         return;
     }
+    selectRecordLayout(document, record);
     var layerIndex = { text: {}, image: {}, switches: {} };
-    addLayers(document, layerIndex);
+    addLayers(ACTIVE_LAYOUT_GROUP || document, layerIndex);
     setSwitches(layerIndex, record, result);
 
     for (var textKey in layerIndex.text) {
@@ -928,6 +1038,12 @@ function validateTargetSize(document) {
     var width = Math.round(document.width.as("px"));
     var height = Math.round(document.height.as("px"));
     var target = CHANNEL_PROFILE && CHANNEL_PROFILE.target_size;
+    if (!target && CHANNEL_PROFILE && CHANNEL_PROFILE.variants) {
+        var variantName = CHANNEL_PROFILE.default_variant;
+        if (variantName && CHANNEL_PROFILE.variants[variantName]) {
+            target = CHANNEL_PROFILE.variants[variantName];
+        }
+    }
     if (target && (width !== target.width || height !== target.height)) {
         throw new Error("E_SIZE_MISMATCH: 模板尺寸 " + width + "x" + height + "，profile 要求 " + target.width + "x" + target.height);
     }

@@ -748,6 +748,125 @@ function Select-ProductTask {
     return $null
 }
 
+function Select-ChannelProfile {
+    param([object[]]$Profiles)
+    $available = @($Profiles | Where-Object { $_.status -eq 'enabled' })
+    if ($available.Count -eq 0) {
+        throw 'E_CONFIG_MISMATCH：渠道配置中没有可用的品类和渠道。'
+    }
+    $incomplete = @($available | Where-Object {
+        [string]::IsNullOrWhiteSpace([string]$_.category) -or [string]::IsNullOrWhiteSpace([string]$_.channel)
+    })
+    if ($incomplete.Count -gt 0) {
+        $profileNames = @($incomplete | ForEach-Object { [string]$_.profile_id }) -join '、'
+        throw "E_CONFIG_MISMATCH：已启用渠道缺少品类或渠道标记：$profileNames"
+    }
+    $combinationProfiles = @{}
+    foreach ($availableProfile in $available) {
+        $combinationKey = ([string]$availableProfile.category).Trim() + '|' + ([string]$availableProfile.channel).Trim()
+        if ($combinationProfiles.ContainsKey($combinationKey)) {
+            throw "E_CONFIG_MISMATCH：品类渠道组合重复：$($availableProfile.category) + $($availableProfile.channel)（$($combinationProfiles[$combinationKey])、$($availableProfile.profile_id)）"
+        }
+        $combinationProfiles[$combinationKey] = [string]$availableProfile.profile_id
+    }
+
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = '选择品类和渠道'
+    $form.StartPosition = 'CenterScreen'
+    $form.Size = New-Object System.Drawing.Size(520, 280)
+    $form.MinimizeBox = $false
+    $form.MaximizeBox = $false
+    $form.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
+
+    $title = New-Object System.Windows.Forms.Label
+    $title.Text = '请选择本次主图任务对应的品类和渠道'
+    $title.AutoSize = $true
+    $title.Location = New-Object System.Drawing.Point(18, 18)
+    $form.Controls.Add($title)
+
+    $categoryLabel = New-Object System.Windows.Forms.Label
+    $categoryLabel.Text = '品类'
+    $categoryLabel.AutoSize = $true
+    $categoryLabel.Location = New-Object System.Drawing.Point(18, 65)
+    $form.Controls.Add($categoryLabel)
+
+    $categoryCombo = New-Object System.Windows.Forms.ComboBox
+    $categoryCombo.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
+    $categoryCombo.Location = New-Object System.Drawing.Point(92, 61)
+    $categoryCombo.Size = New-Object System.Drawing.Size(360, 26)
+    @($available | ForEach-Object { [string]$_.category } | Select-Object -Unique) | ForEach-Object { [void]$categoryCombo.Items.Add($_) }
+    $form.Controls.Add($categoryCombo)
+
+    $channelLabel = New-Object System.Windows.Forms.Label
+    $channelLabel.Text = '渠道'
+    $channelLabel.AutoSize = $true
+    $channelLabel.Location = New-Object System.Drawing.Point(18, 108)
+    $form.Controls.Add($channelLabel)
+
+    $channelCombo = New-Object System.Windows.Forms.ComboBox
+    $channelCombo.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
+    $channelCombo.Location = New-Object System.Drawing.Point(92, 104)
+    $channelCombo.Size = New-Object System.Drawing.Size(360, 26)
+    $form.Controls.Add($channelCombo)
+
+    $version = New-Object System.Windows.Forms.Label
+    $version.AutoSize = $true
+    $version.ForeColor = [System.Drawing.Color]::DimGray
+    $version.Location = New-Object System.Drawing.Point(92, 142)
+    $form.Controls.Add($version)
+
+    $refreshChannels = {
+        $channelCombo.Items.Clear()
+        $category = [string]$categoryCombo.SelectedItem
+        @($available | Where-Object { $_.category -eq $category } | ForEach-Object { [string]$_.channel } | Select-Object -Unique) | ForEach-Object {
+            [void]$channelCombo.Items.Add($_)
+        }
+        if ($channelCombo.Items.Count -gt 0) { $channelCombo.SelectedIndex = 0 }
+    }
+    $refreshVersion = {
+        $matches = @($available | Where-Object {
+            $_.category -eq [string]$categoryCombo.SelectedItem -and $_.channel -eq [string]$channelCombo.SelectedItem
+        })
+        if ($matches.Count -eq 1) {
+            $selected = $matches[0]
+            $version.Text = ''
+            $form.Tag = [string]$selected.profile_id
+        } else {
+            $version.Text = '渠道配置不唯一，请联系工具维护人员。'
+            $form.Tag = $null
+        }
+    }
+    $categoryCombo.Add_SelectedIndexChanged({ & $refreshChannels })
+    $channelCombo.Add_SelectedIndexChanged({ & $refreshVersion })
+
+    $okButton = New-Object System.Windows.Forms.Button
+    $okButton.Text = '下一步'
+    $okButton.Location = New-Object System.Drawing.Point(275, 185)
+    $okButton.Size = New-Object System.Drawing.Size(86, 30)
+    $okButton.Add_Click({
+        if ($form.Tag) {
+            $form.DialogResult = [System.Windows.Forms.DialogResult]::OK
+            $form.Close()
+        }
+    })
+    $form.Controls.Add($okButton)
+    $form.AcceptButton = $okButton
+
+    $cancelButton = New-Object System.Windows.Forms.Button
+    $cancelButton.Text = '取消'
+    $cancelButton.Location = New-Object System.Drawing.Point(370, 185)
+    $cancelButton.Size = New-Object System.Drawing.Size(82, 30)
+    $cancelButton.Add_Click({ $form.DialogResult = [System.Windows.Forms.DialogResult]::Cancel; $form.Close() })
+    $form.Controls.Add($cancelButton)
+    $form.CancelButton = $cancelButton
+
+    # Keep the original v1.0 path as the initial selection for existing users.
+    $preferred = @($available | Where-Object { $_.category -eq '纸品' -and $_.channel -eq '京东自营' })
+    $categoryCombo.SelectedItem = if ($preferred.Count -eq 1) { [string]$preferred[0].category } else { $categoryCombo.Items[0] }
+    if ($form.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { return [string]$form.Tag }
+    return $null
+}
+
 function Move-FormIntoVisibleWorkingArea {
     param([object]$Form)
     if (-not $Form) { return }
@@ -777,7 +896,7 @@ function Select-TaskSettings {
     )
 
     $form = New-Object System.Windows.Forms.Form
-    $form.Text = '电商主图套版工具 1.1'
+    $form.Text = '电商主图套版工具 1.2'
     $form.StartPosition = 'CenterScreen'
     $form.Size = New-Object System.Drawing.Size(860, 650)
     $form.MinimumSize = New-Object System.Drawing.Size(860, 650)
@@ -853,24 +972,24 @@ function Select-TaskSettings {
     $outputLabel = New-Object System.Windows.Forms.Label
     $outputLabel.Text = '成品保存到'
     $outputLabel.AutoSize = $true
-    $outputLabel.Location = New-Object System.Drawing.Point(16, (if ($IsBatchChannelTask) { 169 } else { 131 }))
+    $outputLabel.Location = New-Object System.Drawing.Point(16, $(if ($IsBatchChannelTask) { 169 } else { 131 }))
     $form.Controls.Add($outputLabel)
 
     $outputBox = New-Object System.Windows.Forms.TextBox
-    $outputBox.Location = New-Object System.Drawing.Point(125, (if ($IsBatchChannelTask) { 166 } else { 128 }))
+    $outputBox.Location = New-Object System.Drawing.Point(125, $(if ($IsBatchChannelTask) { 166 } else { 128 }))
     $outputBox.Size = New-Object System.Drawing.Size(480, 24)
     $outputBox.Text = $InitialOutputRoot
     $form.Controls.Add($outputBox)
 
     $outputBrowse = New-Object System.Windows.Forms.Button
     $outputBrowse.Text = '更改...'
-    $outputBrowse.Location = New-Object System.Drawing.Point(620, (if ($IsBatchChannelTask) { 164 } else { 126 }))
+    $outputBrowse.Location = New-Object System.Drawing.Point(620, $(if ($IsBatchChannelTask) { 164 } else { 126 }))
     $outputBrowse.Size = New-Object System.Drawing.Size(88, 28)
     $form.Controls.Add($outputBrowse)
 
     $openOutputButton = New-Object System.Windows.Forms.Button
     $openOutputButton.Text = '打开位置'
-    $openOutputButton.Location = New-Object System.Drawing.Point(725, (if ($IsBatchChannelTask) { 164 } else { 126 }))
+    $openOutputButton.Location = New-Object System.Drawing.Point(725, $(if ($IsBatchChannelTask) { 164 } else { 126 }))
     $openOutputButton.Size = New-Object System.Drawing.Size(88, 28)
     $form.Controls.Add($openOutputButton)
 
@@ -878,18 +997,18 @@ function Select-TaskSettings {
     $outputHint.Text = '每次任务会自动新建文件夹，不会覆盖以前的成品。'
     $outputHint.AutoSize = $true
     $outputHint.ForeColor = [System.Drawing.Color]::DimGray
-    $outputHint.Location = New-Object System.Drawing.Point(125, (if ($IsBatchChannelTask) { 196 } else { 158 }))
+    $outputHint.Location = New-Object System.Drawing.Point(125, $(if ($IsBatchChannelTask) { 196 } else { 158 }))
     $form.Controls.Add($outputHint)
 
     $sheetLabel = New-Object System.Windows.Forms.Label
     $sheetLabel.Text = '3  数据工作表'
     $sheetLabel.AutoSize = $true
-    $sheetLabel.Location = New-Object System.Drawing.Point(16, (if ($IsBatchChannelTask) { 233 } else { 195 }))
+    $sheetLabel.Location = New-Object System.Drawing.Point(16, $(if ($IsBatchChannelTask) { 233 } else { 195 }))
     $sheetLabel.Visible = -not $IsBatchChannelTask
     $form.Controls.Add($sheetLabel)
 
     $sheetCombo = New-Object System.Windows.Forms.ComboBox
-    $sheetCombo.Location = New-Object System.Drawing.Point(125, (if ($IsBatchChannelTask) { 230 } else { 192 }))
+    $sheetCombo.Location = New-Object System.Drawing.Point(125, $(if ($IsBatchChannelTask) { 230 } else { 192 }))
     $sheetCombo.Size = New-Object System.Drawing.Size(300, 26)
     $sheetCombo.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
     $sheetCombo.Visible = -not $IsBatchChannelTask
@@ -897,7 +1016,7 @@ function Select-TaskSettings {
 
     $reloadButton = New-Object System.Windows.Forms.Button
     $reloadButton.Text = '重新读取'
-    $reloadButton.Location = New-Object System.Drawing.Point(440, (if ($IsBatchChannelTask) { 228 } else { 190 }))
+    $reloadButton.Location = New-Object System.Drawing.Point(440, $(if ($IsBatchChannelTask) { 228 } else { 190 }))
     $reloadButton.Size = New-Object System.Drawing.Size(96, 28)
     $reloadButton.Visible = -not $IsBatchChannelTask
     $form.Controls.Add($reloadButton)
@@ -905,26 +1024,26 @@ function Select-TaskSettings {
     $productLabel = New-Object System.Windows.Forms.Label
     $productLabel.Text = '4  商品范围'
     $productLabel.AutoSize = $true
-    $productLabel.Location = New-Object System.Drawing.Point(16, (if ($IsBatchChannelTask) { 281 } else { 243 }))
+    $productLabel.Location = New-Object System.Drawing.Point(16, $(if ($IsBatchChannelTask) { 281 } else { 243 }))
     $productLabel.Visible = -not $IsBatchChannelTask
     $form.Controls.Add($productLabel)
 
     $allProductsRadio = New-Object System.Windows.Forms.RadioButton
     $allProductsRadio.Text = '全部商品'
     $allProductsRadio.AutoSize = $true
-    $allProductsRadio.Location = New-Object System.Drawing.Point(125, (if ($IsBatchChannelTask) { 279 } else { 241 }))
+    $allProductsRadio.Location = New-Object System.Drawing.Point(125, $(if ($IsBatchChannelTask) { 279 } else { 241 }))
     $allProductsRadio.Visible = -not $IsBatchChannelTask
     $form.Controls.Add($allProductsRadio)
 
     $singleProductRadio = New-Object System.Windows.Forms.RadioButton
     $singleProductRadio.Text = '只生成勾选的商品'
     $singleProductRadio.AutoSize = $true
-    $singleProductRadio.Location = New-Object System.Drawing.Point(225, (if ($IsBatchChannelTask) { 279 } else { 241 }))
+    $singleProductRadio.Location = New-Object System.Drawing.Point(225, $(if ($IsBatchChannelTask) { 279 } else { 241 }))
     $singleProductRadio.Visible = -not $IsBatchChannelTask
     $form.Controls.Add($singleProductRadio)
 
     $productList = New-Object System.Windows.Forms.CheckedListBox
-    $productList.Location = New-Object System.Drawing.Point(125, (if ($IsBatchChannelTask) { 311 } else { 273 }))
+    $productList.Location = New-Object System.Drawing.Point(125, $(if ($IsBatchChannelTask) { 311 } else { 273 }))
     $productList.Size = New-Object System.Drawing.Size(688, 166)
     $productList.CheckOnClick = $true
     $productList.Enabled = $false
@@ -935,19 +1054,19 @@ function Select-TaskSettings {
     $statusLabel.Text = '请先选择商品信息表格。'
     $statusLabel.AutoEllipsis = $true
     $statusLabel.Size = New-Object System.Drawing.Size(797, 42)
-    $statusLabel.Location = New-Object System.Drawing.Point(16, (if ($IsBatchChannelTask) { 492 } else { 454 }))
+    $statusLabel.Location = New-Object System.Drawing.Point(16, $(if ($IsBatchChannelTask) { 492 } else { 454 }))
     $form.Controls.Add($statusLabel)
 
     $runButton = New-Object System.Windows.Forms.Button
     $runButton.Text = '开始生成'
-    $runButton.Location = New-Object System.Drawing.Point(570, (if ($IsBatchChannelTask) { 548 } else { 510 }))
+    $runButton.Location = New-Object System.Drawing.Point(570, $(if ($IsBatchChannelTask) { 548 } else { 510 }))
     $runButton.Size = New-Object System.Drawing.Size(138, 36)
     $form.Controls.Add($runButton)
     $form.AcceptButton = $runButton
 
     $cancelButton = New-Object System.Windows.Forms.Button
     $cancelButton.Text = '取消'
-    $cancelButton.Location = New-Object System.Drawing.Point(725, (if ($IsBatchChannelTask) { 548 } else { 510 }))
+    $cancelButton.Location = New-Object System.Drawing.Point(725, $(if ($IsBatchChannelTask) { 548 } else { 510 }))
     $cancelButton.Size = New-Object System.Drawing.Size(88, 36)
     $form.Controls.Add($cancelButton)
     $form.CancelButton = $cancelButton
@@ -985,7 +1104,23 @@ function Select-TaskSettings {
             return $false
         }
 
-        $productLines = @(Invoke-Python -Python $Python -Arguments @($sheetScript, '--products', $excelBox.Text.Trim(), [string]$sheetCombo.SelectedItem) 2>&1)
+        $variantHint = ''
+        $previewVariantId = ''
+        if ($ProfileConfig -and $sheetCombo.SelectedItem) {
+            try {
+                $previewVariantId = Get-VariantForSheet -ProfileConfig $ProfileConfig -SheetName ([string]$sheetCombo.SelectedItem)
+                $previewVariant = $ProfileConfig.variants.$previewVariantId
+                $variantHint = " 当前规格：$previewVariantId（$($previewVariant.width)x$($previewVariant.height)）。"
+            } catch {
+                $statusLabel.Text = "规格匹配失败：$($_.Exception.Message)"
+                return $false
+            }
+        }
+        $productArguments = @($sheetScript, '--products', $excelBox.Text.Trim(), [string]$sheetCombo.SelectedItem)
+        if ($ProfileConfig -and -not [string]::IsNullOrWhiteSpace([string]$ProfileConfig.profile_id)) {
+            $productArguments += @('--profile', [string]$ProfileConfig.profile_id, '--variant', $previewVariantId)
+        }
+        $productLines = @(Invoke-Python -Python $Python -Arguments $productArguments 2>&1)
         if ($LASTEXITCODE -ne 0) {
             $statusLabel.Text = "读取商品任务列表失败：$($productLines -join '；')"
             return $false
@@ -1008,16 +1143,6 @@ function Select-TaskSettings {
             }
         }
         $productList.Enabled = ($singleProductRadio.Checked -and $singleProductRadio.Enabled)
-        $variantHint = ''
-        if ($ProfileConfig -and $sheetCombo.SelectedItem) {
-            try {
-                $previewVariantId = Get-VariantForSheet -ProfileConfig $ProfileConfig -SheetName ([string]$sheetCombo.SelectedItem)
-                $previewVariant = $ProfileConfig.variants.$previewVariantId
-                $variantHint = " 当前规格：$previewVariantId（$($previewVariant.width)x$($previewVariant.height)）。"
-            } catch {
-                $variantHint = " 规格匹配失败：$($_.Exception.Message)"
-            }
-        }
         $statusLabel.Text = "表格读取完成：$($productList.Items.Count) 个商品。默认生成全部商品。$variantHint"
         return $true
     }
@@ -1806,9 +1931,22 @@ try {
     $script:Settings = Read-UserSettings
     if (-not (Test-Path -LiteralPath $channelProfilesPath -PathType Leaf)) { throw "E_PROFILE_UNSUPPORTED: 缺少 profile 配置：$channelProfilesPath" }
     $profileDocument = Get-Content -LiteralPath $channelProfilesPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    $profileId = if ([string]::IsNullOrWhiteSpace($Profile)) { 'legacy-v1' } else { $Profile }
-    $selectedProfile = @($profileDocument.profiles | Where-Object { $_.profile_id -eq $profileId }) | Select-Object -First 1
-    if (-not $selectedProfile) { throw "E_PROFILE_UNSUPPORTED: 不支持的 profile：$profileId" }
+    $profileId = $Profile
+    if ([string]::IsNullOrWhiteSpace($profileId)) {
+        if ($NoUi) {
+            $profileId = 'legacy-v1'
+        } else {
+            $profileId = Select-ChannelProfile -Profiles @($profileDocument.profiles)
+            if ([string]::IsNullOrWhiteSpace($profileId)) {
+                Write-EntryStatus -Status 'cancelled' -Message '用户取消了品类渠道选择。'
+                exit 0
+            }
+        }
+    }
+    $profileMatches = @($profileDocument.profiles | Where-Object { $_.profile_id -eq $profileId })
+    if ($profileMatches.Count -eq 0) { throw "E_PROFILE_UNSUPPORTED: 不支持的 profile：$profileId" }
+    if ($profileMatches.Count -gt 1) { throw "E_CONFIG_MISMATCH：profile_id 重复：$profileId" }
+    $selectedProfile = $profileMatches[0]
     if ($selectedProfile.status -ne 'enabled') { throw "E_PROFILE_UNSUPPORTED: $($selectedProfile.approval_note)" }
     # A legacy parameter is kept for older shortcuts, but every run is now one
     # selected Sheet/variant task.  750 and 800 are never dispatched together.
@@ -1878,8 +2016,12 @@ try {
     if ([string]::IsNullOrWhiteSpace($sheetName)) {
         throw 'E_PROFILE_SHEET_MISMATCH：未选择数据工作表。'
     }
-    if ([string]::IsNullOrWhiteSpace($Variant) -and $selectedProfile.variant_selection -eq 'sheet') {
-        $variantId = Get-VariantForSheet -ProfileConfig $selectedProfile -SheetName $sheetName
+    if ($selectedProfile.variant_selection -eq 'sheet') {
+        $sheetVariantId = Get-VariantForSheet -ProfileConfig $selectedProfile -SheetName $sheetName
+        if (-not [string]::IsNullOrWhiteSpace($Variant) -and $Variant -ne $sheetVariantId) {
+            throw "E_PROFILE_SHEET_MISMATCH：Sheet '$sheetName' 对应 $sheetVariantId，不能使用 $Variant。"
+        }
+        $variantId = $sheetVariantId
         $selectedVariant = $selectedProfile.variants.$variantId
         if (-not $selectedVariant) { throw "E_PROFILE_UNSUPPORTED: profile $profileId 不支持 variant：$variantId" }
         $selectedProfile | Add-Member -NotePropertyName variant -NotePropertyValue $variantId -Force
@@ -1956,7 +2098,10 @@ try {
 
     if ($NoUi) {
         Set-RunProgress -Stage '读取商品任务列表' -Detail '正在读取当前 Sheet 中的商品文件名。'
-        $productLines = @(Invoke-Python -Python $python -Arguments @($sheetScript, '--products', $excelPath, $sheetName) 2>&1)
+        $productLines = @(Invoke-Python -Python $python -Arguments @(
+            $sheetScript, '--products', $excelPath, $sheetName,
+            '--profile', $profileId, '--variant', $variantId
+        ) 2>&1)
         if ($LASTEXITCODE -ne 0) {
             throw "读取商品任务列表失败：$($productLines -join '；')"
         }
@@ -2057,6 +2202,14 @@ try {
         Close-RunProgressWindow
         Write-EntryStatus -Status 'data_validation_failed' -Message $validationMessage
         Write-TaskHistory -Status '数据未通过' -Message "没有可生成商品；请查看任务记录中的异常记录.csv。"
+        if (-not $NoUi) {
+            [void][System.Windows.Forms.MessageBox]::Show(
+                "本次没有可生成的商品。`r`n请检查表格必填内容和素材路径，详情已写入任务记录。",
+                '任务未开始',
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Warning
+            )
+        }
         exit 1
     }
     $issueSummary = if ($errorRows.Count -gt 0) {
@@ -2171,5 +2324,14 @@ try {
     }
     Write-EntryFailureReport -ErrorSummary $message -Suggestion '错误已经写入工具任务记录；需要排查时，请提供任务文件夹中的任务记录，或用户目录下的工具任务记录。'
     Write-TaskHistory -Status '失败' -Message $message
+    if (-not $NoUi -and $_.Exception.Message -match 'E_(PROFILE_[A-Z_]+|CONFIG_MISMATCH|VAR_[A-Z_]+|SIZE_MISMATCH)') {
+        $errorCode = $Matches[0]
+        [void][System.Windows.Forms.MessageBox]::Show(
+            "本次任务未开始：表格、渠道或模板配置未通过检查。`r`n错误码：$errorCode`r`n详情已写入工具任务记录。",
+            '任务未开始',
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Warning
+        )
+    }
     exit 1
 }
