@@ -1241,7 +1241,7 @@ function Select-TaskSettings {
         $previewVariantId = ''
         if ($ProfileConfig -and $sheetCombo.SelectedItem) {
             try {
-                $previewVariantId = Get-VariantForSheet -ProfileConfig $ProfileConfig -SheetName ([string]$sheetCombo.SelectedItem)
+                $previewVariantId = Get-VariantForSheet -ProfileConfig $ProfileConfig -SheetName ([string]$sheetCombo.SelectedItem) -ExcelPath $excelBox.Text.Trim() -Python $Python
                 $previewVariant = $ProfileConfig.variants.$previewVariantId
                 $variantHint = " 当前规格：$previewVariantId（$($previewVariant.width)x$($previewVariant.height)）。"
             } catch {
@@ -2150,19 +2150,41 @@ function ConvertTo-ProcessArgument {
 function Get-VariantForSheet {
     param(
         [object]$ProfileConfig,
-        [string]$SheetName
+        [string]$SheetName,
+        [string]$ExcelPath = '',
+        [string]$Python = ''
     )
     $namedVariants = @($ProfileConfig.variants.PSObject.Properties | Where-Object {
         $_.Value -and -not [string]::IsNullOrWhiteSpace([string]$_.Value.sheet_name)
     })
-    if ($namedVariants.Count -eq 0) {
-        return [string]$ProfileConfig.default_variant
+    if ($namedVariants.Count -gt 0) {
+        $matches = @($namedVariants | Where-Object { [string]$_.Value.sheet_name -eq $SheetName })
+        if ($matches.Count -ne 1) {
+            throw "E_PROFILE_SHEET_MISMATCH：Sheet '$SheetName' 未匹配到唯一的模板规格，请选择已配置的运营 Sheet。"
+        }
+        return [string]$matches[0].Name
     }
-    $matches = @($namedVariants | Where-Object { [string]$_.Value.sheet_name -eq $SheetName })
-    if ($matches.Count -ne 1) {
-        throw "E_PROFILE_SHEET_MISMATCH：Sheet '$SheetName' 未匹配到唯一的模板规格，请选择已配置的运营 Sheet。"
+    $outputLabelVariants = @($ProfileConfig.variants.PSObject.Properties | Where-Object {
+        $_.Value -and -not [string]::IsNullOrWhiteSpace([string]$_.Value.output_label)
+    })
+    if ($outputLabelVariants.Count -gt 0) {
+        if ([string]::IsNullOrWhiteSpace($ExcelPath) -or [string]::IsNullOrWhiteSpace($Python)) {
+            throw "E_PROFILE_SHEET_MISMATCH：$SheetName 需要从 Excel 输出规格解析模板规格。"
+        }
+        $resolved = @(Invoke-Python -Python $Python -Arguments @(
+                $sheetScript, '--resolve-variant', $ExcelPath, $SheetName,
+                '--profile', [string]$ProfileConfig.profile_id
+            ) 2>&1)
+        if ($LASTEXITCODE -ne 0) {
+            throw ($resolved -join '；')
+        }
+        $candidate = @($resolved | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Select-Object -Last 1)
+        if ($candidate.Count -ne 1) {
+            throw "E_PROFILE_SHEET_MISMATCH：$SheetName 未解析到唯一模板规格。"
+        }
+        return [string]$candidate[0]
     }
-    return [string]$matches[0].Name
+    return [string]$ProfileConfig.default_variant
 }
 
 try {
@@ -2277,7 +2299,7 @@ try {
         throw 'E_PROFILE_SHEET_MISMATCH：未选择数据工作表。'
     }
     if ($selectedProfile.variant_selection -eq 'sheet') {
-        $sheetVariantId = Get-VariantForSheet -ProfileConfig $selectedProfile -SheetName $sheetName
+        $sheetVariantId = Get-VariantForSheet -ProfileConfig $selectedProfile -SheetName $sheetName -ExcelPath $excelPath -Python $python
         if (-not [string]::IsNullOrWhiteSpace($Variant) -and $Variant -ne $sheetVariantId) {
             throw "E_PROFILE_SHEET_MISMATCH：Sheet '$sheetName' 对应 $sheetVariantId，不能使用 $Variant。"
         }
