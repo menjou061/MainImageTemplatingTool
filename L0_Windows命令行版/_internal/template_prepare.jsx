@@ -225,6 +225,32 @@ function hygieneLayoutGroupNames() {
     return configured || [];
 }
 
+function inactiveHygieneLayouts(document, layerIndex) {
+    var configured = CHANNEL_PROFILE && CHANNEL_PROFILE.record_layout && CHANNEL_PROFILE.record_layout.groups;
+    var active = hygieneLayoutGroupNames();
+    var activeNames = {};
+    var inactive = [];
+    if (!configured || configured.length === 0 || !active || active.length === 0) {
+        return inactive;
+    }
+    for (var activeIndex = 0; activeIndex < active.length; activeIndex++) {
+        activeNames[active[activeIndex]] = true;
+    }
+    for (var configuredIndex = 0; configuredIndex < configured.length; configuredIndex++) {
+        var layoutName = configured[configuredIndex];
+        if (activeNames[layoutName]) {
+            continue;
+        }
+        var matches = findNamedLayers(document, layoutName, layerIndex);
+        for (var matchIndex = 0; matchIndex < matches.length; matchIndex++) {
+            if (matches[matchIndex].typename === "LayerSet") {
+                inactive.push({ name: layoutName, layer: matches[matchIndex] });
+            }
+        }
+    }
+    return inactive;
+}
+
 function hygieneProblems(document, layerIndex) {
     var expected = ["!商品图", "@卖点", "@备注", "@片数套", "@片数数量", "@到手标签", "@到手", "@价格活动价", "@价格活动价副标", "@价格优惠券", "@价格优惠券副标", "@价格立减", "@赠品文案1", "@赠品文案2", "@赠品文案3", "!赠品图1", "!赠品图2", "!赠品图3"];
     var expectedGroups = ["#赠品顶部", "#赠品区域"];
@@ -441,11 +467,22 @@ function applyProfileBindings(document) {
 
 function inspectPreparation(document, layerIndex) {
     if (isHygieneRecordProfile()) {
-        var hygieneIssues = hygieneProblems(document, layerIndex || buildLayerIndex(document));
+        var scopedIndex = layerIndex || buildLayerIndex(document);
+        var hygieneIssues = hygieneProblems(document, scopedIndex);
+        var inactiveLayouts = inactiveHygieneLayouts(document, scopedIndex);
         if (hygieneIssues.length === 0) {
+            if (inactiveLayouts.length > 0) {
+                return {
+                    status: "NEEDS_ISOLATION",
+                    message: "本次版式字段已通过体检，但模板包含 " + inactiveLayouts.length + " 个未使用版式；将只保留本次任务版式的副本。"
+                };
+            }
             return { status: "READY", message: "卫品天猫官旗 750 本次任务版式已通过体检。" };
         }
-        return { status: "NEEDS_PREP", message: "已识别卫品天猫官旗 750 模板，仅会改造本次任务版式的字段图层。" };
+        return {
+            status: "NEEDS_PREP",
+            message: "已识别卫品天猫官旗 750 模板，仅会改造本次任务版式的字段图层；未使用版式会从任务副本移除。"
+        };
     }
     var existing = templateProblems(document);
     if (existing.length === 0) {
@@ -706,6 +743,16 @@ function prepareHygieneTemplate(document, layerIndex) {
     }
 }
 
+function removeInactiveHygieneLayouts(document, layerIndex) {
+    var inactive = inactiveHygieneLayouts(document, layerIndex);
+    var removed = [];
+    for (var index = inactive.length - 1; index >= 0; index--) {
+        inactive[index].layer.remove();
+        removed.push(inactive[index].name);
+    }
+    return removed;
+}
+
 function prepareTemplate(document, inspection, layerIndex) {
     if (inspection.status === "READY") {
         return inspection;
@@ -715,12 +762,21 @@ function prepareTemplate(document, inspection, layerIndex) {
     }
 
     if (isHygieneRecordProfile()) {
-        prepareHygieneTemplate(document, layerIndex || buildLayerIndex(document));
+        // Isolate the task copy before mapping. This keeps Photoshop from
+        // converting and saving unrelated layouts in a multi-layout PSD.
+        var removedLayouts = removeInactiveHygieneLayouts(document, layerIndex || buildLayerIndex(document));
+        if (inspection.status === "NEEDS_PREP") {
+            prepareHygieneTemplate(document, buildLayerIndex(document));
+        }
         var hygieneIssues = hygieneProblems(document, buildLayerIndex(document));
         if (hygieneIssues.length > 0) {
             throw new Error("卫品模板自动映射后仍不完整：" + hygieneIssues.join("；"));
         }
-        return { status: "PREPARED", message: "已为卫品天猫官旗 750 模板建立图层映射。" };
+        var actionMessage = inspection.status === "NEEDS_PREP" ? "建立图层映射" : "保留已通过体检的字段映射";
+        return {
+            status: "PREPARED",
+            message: "已为卫品天猫官旗 750 模板" + actionMessage + "，并从任务副本移除 " + removedLayouts.length + " 个未使用版式。"
+        };
     }
 
     var all = [];
@@ -795,7 +851,7 @@ function writePreparationReport(document, outputFile, message) {
     ];
     if (isHygieneRecordProfile()) {
         lines.push("本次映射版式：" + hygieneLayoutGroupNames().join("、"));
-        lines.push("说明：仅处理本次任务版式的字段图层；未扫描或改造其他版式。");
+        lines.push("说明：仅处理本次任务版式的字段图层；未使用版式已从任务副本移除，原始 PSD 未修改。");
     }
     report.encoding = "UTF8";
     if (report.open("w")) {
