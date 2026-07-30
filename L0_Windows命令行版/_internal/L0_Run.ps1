@@ -2084,7 +2084,7 @@ function Assert-TemplateDataBindings {
     Add-Log "模板字段一致性预检：检查表格已填写的可选字段：$($dataFields -join '、')。"
     $check = Invoke-TemplatePreparationCheck -Application $Application -TemplatePath $TemplatePath -Mode 'data_check' -DataFieldsWithValues $dataFields
     if ($check.Status -eq 'DATA_BINDING_ERROR') {
-        throw "E_DATA_VAR_UNBOUND：模板与表格字段不匹配，未开始 Photoshop 批量生成。$($check.Message)"
+        throw "E_DATA_VAR_UNBOUND：当前 PSD 模板没有表格中填写的字段图层：$($dataFields -join '、')。请换用带对应区域的 PSD，或清空这些字段后重试。"
     }
     if ($check.Status -ne 'DATA_BINDING_READY') {
         throw "E_DATA_VAR_UNBOUND：模板字段一致性预检未完成：$($check.Message)"
@@ -2635,13 +2635,17 @@ try {
     Write-EntryFailureReport -ErrorSummary $message -Suggestion '错误已经写入工具任务记录；需要排查时，请提供任务文件夹中的任务记录，或用户目录下的工具任务记录。'
     Write-TaskHistory -Status '失败' -Message $message
     if (-not $NoUi -and $_.Exception.Message -notmatch '^已取消') {
+        $friendlyMessage = [string]$_.Exception.Message
+        if ($friendlyMessage -match '^E_DATA_VAR_UNBOUND：(.+)$') {
+            $friendlyMessage = $Matches[1]
+        }
         $errorCode = if ($_.Exception.Message -match 'E_(PROFILE_[A-Z_]+|CONFIG_MISMATCH|VAR_[A-Z_]+|SIZE_MISMATCH)') {
             $Matches[0]
         } else {
             'TASK_FAILED'
         }
         [void][System.Windows.Forms.MessageBox]::Show(
-            "本次任务未完成。`r`n错误码：$errorCode`r`n详情已写入工具任务记录。",
+            "本次任务未开始。`r`n$friendlyMessage`r`n`r`n请按提示修改后重试。`r`n详情已写入工具任务记录。",
             '套版失败',
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Warning

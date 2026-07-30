@@ -90,10 +90,13 @@ class WindowsOutputGuardTest(unittest.TestCase):
         ).read_text(encoding="utf-8-sig")
         self.assertIn("function Assert-TemplateDataBindings", runner_source)
         self.assertIn("-Mode 'data_check'", runner_source)
-        self.assertIn("未开始 Photoshop 批量生成", runner_source)
+        self.assertIn("不通过时不会开始批量生成", runner_source)
         self.assertIn("function dataBindingProblems(document, layerIndex)", template_source)
         self.assertIn("DATA_BINDING_ERROR", template_source)
         self.assertIn("data_fields_with_values", template_source)
+        self.assertIn("请换用带对应区域的 PSD，或清空这些字段后重试", runner_source)
+        self.assertIn("$friendlyMessage = [string]$_.Exception.Message", runner_source)
+        self.assertIn("本次任务未开始。", runner_source)
         self.assertLess(
             runner_source.index("Assert-TemplateDataBindings -Application $photoshop"),
             runner_source.index("Set-RunProgress -Stage 'Photoshop 正在导出'"),
