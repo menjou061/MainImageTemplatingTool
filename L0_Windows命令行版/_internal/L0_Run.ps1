@@ -1943,7 +1943,8 @@ function Invoke-TemplatePreparationCheck {
     param(
         [object]$Application,
         [string]$TemplatePath,
-        [string]$Mode
+        [string]$Mode,
+        [string[]]$DataFieldsWithValues = @()
     )
     if (-not (Test-Path -LiteralPath $templatePrepareScript -PathType Leaf)) {
         throw "缺少 PSD 模板检测脚本：$templatePrepareScript"
@@ -1952,7 +1953,9 @@ function Invoke-TemplatePreparationCheck {
     $script:OpenedDocument = $Application.Open($TemplatePath)
     try {
         $templateText = [System.IO.File]::ReadAllText($templatePrepareScript, [System.Text.Encoding]::UTF8)
-        $prefix = "`$.global.__TEMPLATE_PREP_INPUTS__ = { mode: '" + $Mode + "', profile: " + $profileJson + " };"
+        $dataFieldLiterals = @($DataFieldsWithValues | ForEach-Object { ConvertTo-JsStringLiteral ([string]$_) })
+        $dataFieldsJs = '[' + ($dataFieldLiterals -join ',') + ']'
+        $prefix = "`$.global.__TEMPLATE_PREP_INPUTS__ = { mode: '" + $Mode + "', profile: " + $profileJson + ", data_fields_with_values: " + $dataFieldsJs + " };"
         $scriptText = $prefix + "`r`n" + $templateText
         $rawResult = Invoke-PhotoshopJavaScript -Application $Application -ScriptText $scriptText
         $result = ConvertFrom-TemplatePreparationResult -RawResult $rawResult
@@ -2043,6 +2046,50 @@ function Resolve-TemplateForTask {
     }
     Add-Log "PSD 模板已自动改造为副本：$($prepared.TemplatePath)"
     return $prepared.TemplatePath
+}
+
+function Get-DataFieldsWithValues {
+    param(
+        [object[]]$Rows,
+        [object]$ProfileConfig
+    )
+    $fields = New-Object System.Collections.Generic.List[string]
+    foreach ($field in @($ProfileConfig.optional_psd_variables)) {
+        if ([string]::IsNullOrWhiteSpace([string]$field)) {
+            continue
+        }
+        foreach ($row in $Rows) {
+            $property = $row.PSObject.Properties[[string]$field]
+            if ($property -and -not [string]::IsNullOrWhiteSpace([string]$property.Value)) {
+                $fields.Add([string]$field)
+                break
+            }
+        }
+    }
+    return @($fields)
+}
+
+function Assert-TemplateDataBindings {
+    param(
+        [object]$Application,
+        [string]$TemplatePath,
+        [object[]]$Rows,
+        [object]$ProfileConfig
+    )
+    $dataFields = @(Get-DataFieldsWithValues -Rows $Rows -ProfileConfig $ProfileConfig)
+    if ($dataFields.Count -eq 0) {
+        Add-Log '模板字段一致性预检：表格没有填写可选 PSD 字段，跳过可选字段绑定检查。'
+        return
+    }
+    Add-Log "模板字段一致性预检：检查表格已填写的可选字段：$($dataFields -join '、')。"
+    $check = Invoke-TemplatePreparationCheck -Application $Application -TemplatePath $TemplatePath -Mode 'data_check' -DataFieldsWithValues $dataFields
+    if ($check.Status -eq 'DATA_BINDING_ERROR') {
+        throw "E_DATA_VAR_UNBOUND：模板与表格字段不匹配，未开始 Photoshop 批量生成。$($check.Message)"
+    }
+    if ($check.Status -ne 'DATA_BINDING_READY') {
+        throw "E_DATA_VAR_UNBOUND：模板字段一致性预检未完成：$($check.Message)"
+    }
+    Add-Log '模板字段一致性预检通过：表格已填写字段均有对应 PSD 图层。'
 }
 
 function Get-ElapsedText {
@@ -2478,6 +2525,8 @@ try {
         $script:CurrentPsdPath = $psdPath
         Add-Log "本次任务将使用自动生成的模板副本：$psdPath"
     }
+    Set-RunProgress -Stage '模板字段一致性预检' -Detail '正在确认表格已填写字段均有对应 PSD 图层；不通过时不会开始批量生成。'
+    Assert-TemplateDataBindings -Application $photoshop -TemplatePath $psdPath -Rows $dataRows -ProfileConfig $selectedProfile
     $taskInfo = @(
         '电商主图套版任务信息',
         '',

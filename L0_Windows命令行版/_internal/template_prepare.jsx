@@ -98,6 +98,35 @@ function isOptionalProfileVariable(required) {
     return false;
 }
 
+function dataFieldHasValue(name) {
+    var inputs = $.global.__TEMPLATE_PREP_INPUTS__ || {};
+    var fields = inputs.data_fields_with_values || [];
+    for (var index = 0; index < fields.length; index++) {
+        if (String(fields[index]) === String(name)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function dataBindingProblems(document, layerIndex) {
+    var problems = [];
+    if (!CHANNEL_PROFILE || !CHANNEL_PROFILE.required_psd_variables) {
+        return problems;
+    }
+    for (var index = 0; index < CHANNEL_PROFILE.required_psd_variables.length; index++) {
+        var required = CHANNEL_PROFILE.required_psd_variables[index];
+        if (!isOptionalProfileVariable(required) || !dataFieldHasValue(required.name)) {
+            continue;
+        }
+        var expectedName = (required.type === "text" ? "@" : "!") + required.name;
+        if (findNamedLayers(document, expectedName, layerIndex).length === 0) {
+            problems.push("E_DATA_VAR_UNBOUND：表格包含可选字段【" + required.name + "】，但 PSD 缺少 " + expectedName + " 图层");
+        }
+    }
+    return problems;
+}
+
 function findNamedLayers(document, name, layerIndex) {
     if (layerIndex) {
         return layerIndex.named[name] || [];
@@ -942,6 +971,13 @@ function main() {
     var mode = inputs.mode || "check";
     var layerIndex = buildLayerIndex(document);
     var inspection = inspectPreparation(document, layerIndex);
+    if (mode === "data_check") {
+        var dataProblems = dataBindingProblems(document, layerIndex);
+        if (dataProblems.length > 0) {
+            return "DATA_BINDING_ERROR|" + dataProblems.join("；") + "|" + document.fullName.fsName;
+        }
+        return "DATA_BINDING_READY|表格字段与 PSD 图层绑定一致。|" + document.fullName.fsName;
+    }
     if (mode !== "prepare" || inspection.status === "READY" || inspection.status === "AMBIGUOUS") {
         return inspection.status + "|" + inspection.message + "|" + document.fullName.fsName;
     }

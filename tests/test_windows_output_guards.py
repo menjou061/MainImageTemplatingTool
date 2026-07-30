@@ -83,6 +83,22 @@ class WindowsOutputGuardTest(unittest.TestCase):
             batch_source,
         )
 
+    def test_optional_template_fields_are_checked_before_batch_generation(self) -> None:
+        runner_source = self.source
+        template_source = (
+            ROOT / "L0_Windows命令行版" / "_internal" / "template_prepare.jsx"
+        ).read_text(encoding="utf-8-sig")
+        self.assertIn("function Assert-TemplateDataBindings", runner_source)
+        self.assertIn("-Mode 'data_check'", runner_source)
+        self.assertIn("未开始 Photoshop 批量生成", runner_source)
+        self.assertIn("function dataBindingProblems(document, layerIndex)", template_source)
+        self.assertIn("DATA_BINDING_ERROR", template_source)
+        self.assertIn("data_fields_with_values", template_source)
+        self.assertLess(
+            runner_source.index("Assert-TemplateDataBindings -Application $photoshop"),
+            runner_source.index("Set-RunProgress -Stage 'Photoshop 正在导出'"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
