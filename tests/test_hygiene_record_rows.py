@@ -65,7 +65,7 @@ class HygieneRecordRowsTest(unittest.TestCase):
             output = root / "output"
             workbook = Workbook()
             sheet = workbook.active
-            sheet.title = "出图数据"
+            sheet.title = "跑批数据"
             sheet.append(clean_data.RECORD_ROW_HEADERS)
             sheet.append(
                 [
@@ -79,7 +79,7 @@ class HygieneRecordRowsTest(unittest.TestCase):
             workbook.save(workbook_path)
 
             count, errors, data_path, _, error_path = clean_data.build_data(
-                workbook_path, "出图数据", output, None, profile_id="hygiene-tmall-v1.2", variant="main-750"
+                workbook_path, "跑批数据", output, None, profile_id="hygiene-tmall-v1.2", variant="main-750"
             )
 
             self.assertEqual((count, errors), (1, 0))
@@ -178,7 +178,7 @@ class HygieneRecordRowsTest(unittest.TestCase):
             sheet.append(clean_data.STANDARD_RECORD_ROW_HEADERS)
             sheet.append(standard_row(product, "wrong-channel", **{"渠道": "京东自营"}))
             sheet.append(standard_row(product, "disabled", **{"渠道": "京东自营", "是否出图": "否"}))
-            sheet.append(standard_row(product, "other-spec", **{"渠道": "京东自营", "输出规格": "800"}))
+            sheet.append(standard_row(product, "other-spec", **{"输出规格": "800"}))
             sheet.append(standard_row(product, "valid"))
             workbook.save(workbook_path)
 
@@ -191,19 +191,70 @@ class HygieneRecordRowsTest(unittest.TestCase):
                 variant="main-750",
             )
 
-            self.assertEqual((count, errors), (1, 1))
+            self.assertEqual((count, errors), (1, 2))
             with data_path.open(encoding="utf-8-sig", newline="") as handle:
                 self.assertEqual([row["商品文件名"] for row in csv.DictReader(handle)], ["valid"])
             with all_data_path.open(encoding="utf-8-sig", newline="") as handle:
                 self.assertEqual(
                     [row["商品文件名"] for row in csv.DictReader(handle)],
-                    ["wrong-channel", "valid"],
+                    ["wrong-channel", "other-spec", "valid"],
                 )
             with error_path.open(encoding="utf-8-sig", newline="") as handle:
-                error = next(csv.DictReader(handle))
-            self.assertEqual(error["错误码"], "E_CHANNEL_MISMATCH")
-            self.assertIn("京东自营", error["异常详情"])
-            self.assertIn("当前所选渠道", error["建议动作"])
+                errors_by_product = {row["商品文件名"]: row for row in csv.DictReader(handle)}
+            self.assertEqual(set(errors_by_product), {"wrong-channel", "other-spec"})
+            self.assertEqual(errors_by_product["wrong-channel"]["错误码"], "E_CHANNEL_MISMATCH")
+            self.assertIn("京东自营", errors_by_product["wrong-channel"]["异常详情"])
+            self.assertIn("当前所选渠道", errors_by_product["wrong-channel"]["建议动作"])
+            self.assertEqual(errors_by_product["other-spec"]["错误码"], "E_OUTPUT_SPEC_MISMATCH")
+
+    def test_standard_contract_rejects_unknown_status_and_gift_layout(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            product = root / "product.png"
+            product.touch()
+            workbook_path = root / "contract.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "出图数据"
+            sheet.append(clean_data.STANDARD_RECORD_ROW_HEADERS)
+            sheet.append(standard_row(product, "bad-status", **{"检查状态": "待确认"}))
+            sheet.append(standard_row(product, "bad-gift-layout", **{"赠品版式": "顶部赠品"}))
+            sheet.append(standard_row(product, "missing-spec", **{"输出规格": ""}))
+            sheet.append(
+                standard_row(
+                    product,
+                    "combined-errors",
+                    **{"输出规格": "", "检查状态": "待确认", "赠品版式": "顶部赠品"},
+                )
+            )
+            workbook.save(workbook_path)
+
+            count, errors, data_path, all_data_path, error_path = clean_data.build_data(
+                workbook_path,
+                "出图数据",
+                root / "output",
+                None,
+                profile_id="hygiene-tmall-v1.2",
+                variant="main-750",
+            )
+
+            self.assertEqual((count, errors), (0, 4))
+            with data_path.open(encoding="utf-8-sig", newline="") as handle:
+                self.assertEqual(list(csv.DictReader(handle)), [])
+            with all_data_path.open(encoding="utf-8-sig", newline="") as handle:
+                self.assertEqual(
+                    [row["商品文件名"] for row in csv.DictReader(handle)],
+                    ["bad-status", "bad-gift-layout", "missing-spec", "combined-errors"],
+                )
+            with error_path.open(encoding="utf-8-sig", newline="") as handle:
+                errors_by_product = {row["商品文件名"]: row for row in csv.DictReader(handle)}
+            self.assertEqual(errors_by_product["bad-status"]["错误码"], "E_CHECK_STATUS_INVALID")
+            self.assertEqual(errors_by_product["bad-gift-layout"]["错误码"], "E_GIFT_LAYOUT_UNSUPPORTED")
+            self.assertEqual(errors_by_product["missing-spec"]["错误码"], "E_OUTPUT_SPEC_MISSING")
+            combined_detail = errors_by_product["combined-errors"]["异常详情"]
+            self.assertIn("E_OUTPUT_SPEC_MISSING", combined_detail)
+            self.assertIn("E_CHECK_STATUS_INVALID", combined_detail)
+            self.assertIn("E_GIFT_LAYOUT_UNSUPPORTED", combined_detail)
 
     def test_limit_keeps_interleaved_exceptions_within_selected_records(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

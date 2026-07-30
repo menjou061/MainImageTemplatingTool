@@ -51,6 +51,8 @@ class SheetListingTest(unittest.TestCase):
             sheet.append(["渠道", "是否出图", "输出规格", "输出文件名", "产品图路径", "主卖点"])
             sheet.append(["天猫官旗", "是", "750", "sku-current", r"C:\materials\one.png", "卖点"])
             sheet.append(["天猫官旗", "是", "800", "sku-other-size", r"C:\materials\two.png", "卖点"])
+            sheet.append(["天猫官旗", "是", "", "sku-missing-size", r"C:\materials\missing.png", "卖点"])
+            sheet.append(["天猫官旗", "是", "750px", "sku-unknown-size", r"C:\materials\unknown.png", "卖点"])
             sheet.append(["京东自营", "是", "750", "sku-other-channel", r"C:\materials\three.png", "卖点"])
             workbook.save(workbook_path)
 

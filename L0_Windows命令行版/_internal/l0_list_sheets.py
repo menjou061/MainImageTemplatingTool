@@ -103,7 +103,10 @@ def visible_record_products(
                     continue
             if expected_spec:
                 row_spec = as_text(worksheet.cell(row, header_index["输出规格"]).value)
-                if row_spec and row_spec != expected_spec:
+                # Product selection must use the same strict contract as
+                # clean_data: blank and unknown specifications are not shown
+                # for the current variant.
+                if row_spec != expected_spec:
                     continue
             yield worksheet.cell(row, header_index["输出文件名"]).value
         return
