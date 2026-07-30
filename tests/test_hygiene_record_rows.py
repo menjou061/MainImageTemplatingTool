@@ -220,6 +220,13 @@ class HygieneRecordRowsTest(unittest.TestCase):
             sheet.append(standard_row(product, "bad-status", **{"检查状态": "待确认"}))
             sheet.append(standard_row(product, "bad-gift-layout", **{"赠品版式": "顶部赠品"}))
             sheet.append(standard_row(product, "missing-spec", **{"输出规格": ""}))
+            sheet.append(
+                standard_row(
+                    product,
+                    "combined-errors",
+                    **{"输出规格": "", "检查状态": "待确认", "赠品版式": "顶部赠品"},
+                )
+            )
             workbook.save(workbook_path)
 
             count, errors, data_path, all_data_path, error_path = clean_data.build_data(
@@ -231,19 +238,23 @@ class HygieneRecordRowsTest(unittest.TestCase):
                 variant="main-750",
             )
 
-            self.assertEqual((count, errors), (0, 3))
+            self.assertEqual((count, errors), (0, 4))
             with data_path.open(encoding="utf-8-sig", newline="") as handle:
                 self.assertEqual(list(csv.DictReader(handle)), [])
             with all_data_path.open(encoding="utf-8-sig", newline="") as handle:
                 self.assertEqual(
                     [row["商品文件名"] for row in csv.DictReader(handle)],
-                    ["bad-status", "bad-gift-layout", "missing-spec"],
+                    ["bad-status", "bad-gift-layout", "missing-spec", "combined-errors"],
                 )
             with error_path.open(encoding="utf-8-sig", newline="") as handle:
                 errors_by_product = {row["商品文件名"]: row for row in csv.DictReader(handle)}
             self.assertEqual(errors_by_product["bad-status"]["错误码"], "E_CHECK_STATUS_INVALID")
             self.assertEqual(errors_by_product["bad-gift-layout"]["错误码"], "E_GIFT_LAYOUT_UNSUPPORTED")
             self.assertEqual(errors_by_product["missing-spec"]["错误码"], "E_OUTPUT_SPEC_MISSING")
+            combined_detail = errors_by_product["combined-errors"]["异常详情"]
+            self.assertIn("E_OUTPUT_SPEC_MISSING", combined_detail)
+            self.assertIn("E_CHECK_STATUS_INVALID", combined_detail)
+            self.assertIn("E_GIFT_LAYOUT_UNSUPPORTED", combined_detail)
 
     def test_limit_keeps_interleaved_exceptions_within_selected_records(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
