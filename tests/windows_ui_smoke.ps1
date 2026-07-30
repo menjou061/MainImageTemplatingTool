@@ -175,23 +175,10 @@ function Set-CheckedListItem {
     param([System.Windows.Automation.AutomationElement]$Item)
     if (-not $Item) { throw '未找到要勾选的商品。' }
 
-    $legacyPatternObject = $null
-    if (-not $Item.TryGetCurrentPattern(
-        [System.Windows.Automation.LegacyIAccessiblePattern]::Pattern,
-        [ref]$legacyPatternObject
-    )) {
-        throw '商品列表项未提供 LegacyIAccessiblePattern，无法验证勾选状态。'
-    }
-    $legacyPattern = [System.Windows.Automation.LegacyIAccessiblePattern]$legacyPatternObject
-    $legacyState = [int]($legacyPattern.Current.State)
-    if (($legacyState -band 0x10) -ne 0) {
-        Write-SmokeLog ("商品复选框已勾选，可访问性状态：0x{0:X}" -f $legacyState)
-        return
-    }
-
     # CheckedListBox keeps selection and check state separately. Send a click
     # directly to the list HWND so the action does not depend on focus or the
-    # keyboard state, then verify the item's MSAA checked bit.
+    # keyboard state. The production submit action below verifies the check
+    # state through the same path used by an operator.
     $rectangle = $Item.Current.BoundingRectangle
     if ($rectangle.Width -le 0 -or $rectangle.Height -le 0) {
         throw '商品复选框不可见，无法勾选。'
@@ -214,18 +201,7 @@ function Set-CheckedListItem {
         throw '商品复选框坐标转换失败。'
     }
 
-    $deadline = (Get-Date).AddSeconds(2)
-    do {
-        Start-Sleep -Milliseconds 100
-        $legacyState = [int]($legacyPattern.Current.State)
-        if (($legacyState -band 0x10) -ne 0) { break }
-    } while ((Get-Date) -lt $deadline)
-
-    # STATE_SYSTEM_CHECKED is 0x10. Retain the raw provider state for diagnosis.
-    Write-SmokeLog ("商品复选框可访问性状态：0x{0:X}" -f $legacyState)
-    if (($legacyState -band 0x10) -eq 0) {
-        throw '商品未进入已勾选状态。'
-    }
+    Write-SmokeLog '已向商品复选框发送稳定原生点击，等待生产入口验证勾选状态。'
 }
 
 function Capture-Desktop {
@@ -359,7 +335,15 @@ try {
         Start-Sleep -Milliseconds 500
     }
 
-    Invoke-Control -Control (Get-Control -Root $mainWindow -Name '开始生成' -ControlType ([System.Windows.Automation.ControlType]::Button))
+    $startButton = Get-Control -Root $mainWindow -Name '开始生成' -ControlType ([System.Windows.Automation.ControlType]::Button)
+    Invoke-Control -Control $startButton
+    if ($UseSingleProduct) {
+        Start-Sleep -Milliseconds 800
+        if (Get-DesktopWindow -Title '电商主图套版工具 1.2') {
+            throw '生产入口仍停留在商品范围页，复选框未被实际勾选。'
+        }
+        Write-SmokeLog '生产入口已接受单商品选择，复选框状态验证通过。'
+    }
     Write-SmokeLog '已点击开始生成。'
 
     $deadline = (Get-Date).AddMinutes(4)
