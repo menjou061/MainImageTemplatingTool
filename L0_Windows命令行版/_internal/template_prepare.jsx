@@ -447,6 +447,21 @@ function renameGiftImage(document, layer, targetName) {
     return true;
 }
 
+function normalizeGiftSlot(document, slotGroup, targetName) {
+    if (!slotGroup) {
+        throw new Error("E_CONFIG_MISMATCH: 缺少 " + targetName + " 赠品槽位");
+    }
+    var sourceObjects = smartObjectLayersWithin(slotGroup);
+    if (sourceObjects.length === 0) {
+        throw new Error("E_CONFIG_MISMATCH: " + targetName + " 槽位没有可替换素材");
+    }
+    // A supplied gift path represents one finished gift composition. Some
+    // legacy PSDs build one card from several original product objects; turn
+    // that complete card into one smart object before replacement so the old
+    // objects cannot remain underneath or receive the same path repeatedly.
+    convertToSmartObject(document, slotGroup, targetName);
+}
+
 function prepareHygieneLayoutGroup(document, layoutGroup) {
     var product = findFirstGroup(layoutGroup, "产品");
     var productFrame = product ? findFirstGroup(product, "组 7") : null;
@@ -512,16 +527,25 @@ function prepareHygieneLayoutGroup(document, layoutGroup) {
 
     var topGift = findDirectGroup(layoutGroup, "赠品");
     var topGiftLayers = topGift ? smartObjectLayersWithin(topGift) : [];
-    if (topGiftLayers.length > 0) {
-        if (topGiftLayers.length !== 1) {
-            throw new Error("E_CONFIG_MISMATCH: 顶部赠品槽位必须只有一个智能对象，当前有 " + topGiftLayers.length + " 个");
-        }
-        renameGiftImage(document, topGiftLayers[0], "赠品图1");
-        // Photoshop 2026 drops a nested !赠品图1 name when its parent has
-        // the same #赠品图1 switch name. Keep the switch semantic while
-        // using a distinct internal group name so the binding survives save.
-        topGift.name = "#赠品顶部";
+    if (topGiftLayers.length !== 1) {
+        throw new Error("E_CONFIG_MISMATCH: 顶部赠品槽位必须只有一个智能对象，当前有 " + topGiftLayers.length + " 个");
     }
+    renameGiftImage(document, topGiftLayers[0], "赠品图1");
+    var topGiftText = textLayersWithin(topGift);
+    var topGiftCopy = [];
+    for (var topTextIndex = 0; topTextIndex < topGiftText.length; topTextIndex++) {
+        if (trimText(topGiftText[topTextIndex].name) !== "买就送") {
+            topGiftCopy.push(topGiftText[topTextIndex]);
+        }
+    }
+    if (topGiftCopy.length !== 1) {
+        throw new Error("E_CONFIG_MISMATCH: 顶部赠品需要一个独立动态文案图层，当前有 " + topGiftCopy.length + " 个");
+    }
+    renameFirstText(topGiftCopy, "赠品文案1");
+    // Photoshop 2026 drops a nested !赠品图1 name when its parent has
+    // the same #赠品图1 switch name. Keep the switch semantic while
+    // using a distinct internal group name so the binding survives save.
+    topGift.name = "#赠品顶部";
     var bottomGift = bottom ? findDirectGroup(bottom, "赠品") : null;
     if (bottomGift) {
         var giftCopy = findFirstGroup(bottomGift, "文案 拷贝");
@@ -540,11 +564,11 @@ function prepareHygieneLayoutGroup(document, layoutGroup) {
             }
         }
         sortLayersByVisualPosition(dynamicGiftText);
-        if (dynamicGiftText.length < 3) {
-            throw new Error("E_CONFIG_MISMATCH: 赠品区域需要 3 个独立动态文案图层（按上到下对应赠品文案1-3），当前仅找到 " + dynamicGiftText.length + " 个");
+        if (dynamicGiftText.length !== 2) {
+            throw new Error("E_CONFIG_MISMATCH: 下方赠品区域需要 2 个独立动态文案图层（对应赠品文案2-3），当前有 " + dynamicGiftText.length + " 个");
         }
-        for (var copyIndex = 0; copyIndex < dynamicGiftText.length && copyIndex < 3; copyIndex++) {
-            dynamicGiftText[copyIndex].name = "@赠品文案" + (copyIndex + 1);
+        for (var copyIndex = 0; copyIndex < dynamicGiftText.length; copyIndex++) {
+            dynamicGiftText[copyIndex].name = "@赠品文案" + (copyIndex + 2);
         }
         var giftAssets = findFirstGroup(bottomGift, "组 382");
         var giftGroups = giftAssets ? [] : null;
@@ -555,18 +579,10 @@ function prepareHygieneLayoutGroup(document, layoutGroup) {
                 }
             }
             if (giftGroups.length > 0) {
-                var giftTwo = smartObjectLayersWithin(giftGroups[0]);
-                if (giftTwo.length !== 1) {
-                    throw new Error("E_CONFIG_MISMATCH: 赠品图2 槽位必须只有一个智能对象，当前有 " + giftTwo.length + " 个");
-                }
-                renameGiftImage(document, giftTwo[0], "赠品图2");
+                normalizeGiftSlot(document, giftGroups[0], "赠品图2");
             }
             if (giftGroups.length > 1) {
-                var giftThree = smartObjectLayersWithin(giftGroups[1]);
-                if (giftThree.length !== 1) {
-                    throw new Error("E_CONFIG_MISMATCH: 赠品图3 槽位必须只有一个智能对象，当前有 " + giftThree.length + " 个");
-                }
-                renameGiftImage(document, giftThree[0], "赠品图3");
+                normalizeGiftSlot(document, giftGroups[1], "赠品图3");
             }
         }
         // Keep the optional switch key separate from the !赠品图2 image
