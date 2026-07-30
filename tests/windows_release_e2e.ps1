@@ -46,8 +46,19 @@ $extractRoot = Join-Path $WorkRoot 'extracted'
 $outputRoot = Join-Path $WorkRoot 'output'
 $artifactRoot = Join-Path $WorkRoot 'artifacts'
 $workbookPath = Join-Path $WorkRoot 'release_e2e.xlsx'
+$psdCopyPath = Join-Path $WorkRoot 'approved_e2e.psd'
 
 New-Item -Path $extractRoot -ItemType Directory | Out-Null
+Copy-Item -LiteralPath $PsdPath -Destination $psdCopyPath
+$PsdPath = $psdCopyPath
+$identity = [pscustomobject]@{
+    template_id = 'paper-jd-self-main-800-v1'
+    profile_id = 'legacy-v1'
+    profile_version = '1.0.0'
+    variant = 'main-800'
+    psd_sha256 = (Get-FileHash -LiteralPath $PsdPath -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+$identity | ConvertTo-Json | Set-Content -LiteralPath ($PsdPath + '.template.json') -Encoding UTF8
 Expand-ReleaseArchive -ArchivePath $ZipPath -DestinationPath $extractRoot
 $allItems = @(Get-ChildItem -LiteralPath $extractRoot -Force -Recurse)
 $entries = @($allItems | Where-Object { -not $_.PSIsContainer })
