@@ -478,8 +478,11 @@ function recordLayoutBindingErrors(template, profile) {
         }
         var layerIndex = { text: {}, image: {}, switches: {} };
         addLayers(layout, layerIndex);
-        if (!layerIndex.switches["赠品顶部"] || !layerIndex.switches["赠品区域"]) {
-            errors.push("E_VAR_UNBOUND: " + scope + "赠品开关组未完整绑定");
+        var giftSwitches = hygieneGiftSwitchNames();
+        for (var giftSwitchIndex = 0; giftSwitchIndex < giftSwitches.length; giftSwitchIndex++) {
+            if (!layerIndex.switches[giftSwitches[giftSwitchIndex]]) {
+                errors.push("E_VAR_UNBOUND: " + scope + "赠品开关组未完整绑定：" + giftSwitches[giftSwitchIndex]);
+            }
         }
     }
     return errors;
@@ -544,7 +547,18 @@ function setSwitches(layerIndex, record, result) {
 }
 
 function isGiftSwitchKey(key) {
-    return key === "赠品顶部" || key === "赠品区域";
+    var giftSwitches = hygieneGiftSwitchNames();
+    for (var index = 0; index < giftSwitches.length; index++) {
+        if (key === giftSwitches[index]) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function hygieneGiftSwitchNames() {
+    var configured = CHANNEL_PROFILE && CHANNEL_PROFILE.record_layout && CHANNEL_PROFILE.record_layout.gift_switches;
+    return configured && configured.length ? configured : ["赠品顶部", "赠品区域"];
 }
 
 function optionalGroupHasValues(groups, record) {

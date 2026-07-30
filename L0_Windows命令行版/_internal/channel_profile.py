@@ -63,7 +63,7 @@ def get_profile(profile_id: str | None, variant: str | None = None, *, require_e
     # Some channels keep one menu entry while their 750/800 PSDs expose
     # different fields. Apply those variant-specific contracts before
     # preflight and template preparation run.
-    for key in ("required_psd_variables", "mapping", "sheet", "text_fit", "ignored_headers"):
+    for key in ("required_psd_variables", "mapping", "sheet", "text_fit", "ignored_headers", "record_layout"):
         if key in selected_variant_config:
             result[key] = selected_variant_config[key]
     return result

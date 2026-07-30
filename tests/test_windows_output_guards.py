@@ -26,6 +26,19 @@ class WindowsOutputGuardTest(unittest.TestCase):
         self.assertIn("E_PHOTOSHOP_TIMEOUT", self.source)
         self.assertIn("Stop-Job -Job $job", self.source)
 
+    def test_save_user_settings_preserves_timeout_override(self) -> None:
+        save_start = self.source.index("function Save-UserSettings")
+        save_end = self.source.index("function New-RunProgressWindow", save_start)
+        save_source = self.source[save_start:save_end]
+        self.assertIn(
+            "Get-SettingText -Settings $script:Settings -Name 'photoshopTimeoutSeconds'",
+            save_source,
+        )
+        self.assertIn(
+            "Add-Member -NotePropertyName 'photoshopTimeoutSeconds'",
+            save_source,
+        )
+
     def test_success_path_requires_report_and_real_jpg_psd_signatures(self) -> None:
         self.assertIn("function Assert-PhotoshopOutputArtifacts", self.source)
         self.assertIn("E_OUTPUT_INCOMPLETE", self.source)
