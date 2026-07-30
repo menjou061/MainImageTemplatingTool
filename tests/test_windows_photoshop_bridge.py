@@ -31,6 +31,13 @@ class WindowsPhotoshopBridgeTest(unittest.TestCase):
         self.assertIn("正在连接 Photoshop 并准备打开模板", self.source)
         self.assertNotIn("数据预检通过，已连接 Photoshop，准备打开模板", self.source)
 
+    def test_template_identity_blocks_before_photoshop_starts(self) -> None:
+        identity = self.source.index("模板身份校验")
+        start = self.source.index("$photoshop = Start-Photoshop")
+        self.assertLess(identity, start)
+        self.assertIn("E_TEMPLATE_IDENTITY_MISMATCH", self.source)
+        self.assertIn("template_identity.py", self.source)
+
 
 if __name__ == "__main__":
     unittest.main()

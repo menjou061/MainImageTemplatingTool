@@ -124,6 +124,28 @@ class ChannelProfileTest(unittest.TestCase):
         self.assertIn(("纸品", "恒安生活馆"), combinations)
         self.assertIn(("卫品", "天猫官旗"), combinations)
 
+    def test_every_supported_variant_has_a_unique_template_identity(self) -> None:
+        expected = {
+            ("纸品", "京东自营", "main-800"),
+            ("纸品", "天猫官旗", "main-750"),
+            ("纸品", "天猫官旗", "main-800"),
+            ("纸品", "恒安生活馆", "main-750"),
+            ("纸品", "恒安生活馆", "main-800"),
+            ("卫品", "天猫官旗", "main-750"),
+            ("卫品", "天猫官旗", "main-800"),
+        }
+        actual = set()
+        template_ids = []
+        for profile in load_profiles().values():
+            if profile.get("status") != "enabled":
+                continue
+            for variant, config in profile["variants"].items():
+                actual.add((profile["category"], profile["channel"], variant))
+                template_ids.append(config.get("template_id"))
+        self.assertEqual(actual, expected)
+        self.assertTrue(all(template_ids))
+        self.assertEqual(len(template_ids), len(set(template_ids)))
+
 
 if __name__ == "__main__":
     unittest.main()

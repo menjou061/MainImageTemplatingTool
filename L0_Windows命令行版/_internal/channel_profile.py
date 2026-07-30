@@ -57,7 +57,7 @@ def get_profile(profile_id: str | None, variant: str | None = None, *, require_e
         "width": selected_variant_config["width"],
         "height": selected_variant_config["height"],
     }
-    for key in ("export_size", "sheet_name", "template_bindings", "output_label"):
+    for key in ("export_size", "sheet_name", "template_bindings", "output_label", "template_id"):
         if key in selected_variant_config:
             result[key] = selected_variant_config[key]
     # Some channels keep one menu entry while their 750/800 PSDs expose

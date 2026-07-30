@@ -45,6 +45,7 @@ $cleanScript = Join-Path $scriptDir 'clean_data.py'
 $sheetScript = Join-Path $scriptDir 'l0_list_sheets.py'
 $batchScript = Join-Path $scriptDir 'batch_template.jsx'
 $templatePrepareScript = Join-Path $scriptDir 'template_prepare.jsx'
+$templateIdentityScript = Join-Path $scriptDir 'template_identity.py'
 $channelProfilesPath = Join-Path $scriptDir 'channel_profiles.json'
 $runtimeRoot = Join-Path $scriptDir 'runtime'
 $privatePythonDir = Join-Path $runtimeRoot 'python'
@@ -2328,6 +2329,7 @@ try {
     if (-not (Test-Path -LiteralPath $cleanScript)) { throw "缺少清洗脚本：$cleanScript" }
     if (-not (Test-Path -LiteralPath $sheetScript)) { throw "缺少 Sheet 读取脚本：$sheetScript" }
     if (-not (Test-Path -LiteralPath $batchScript)) { throw "缺少 Photoshop JSX：$batchScript" }
+    if (-not (Test-Path -LiteralPath $templateIdentityScript)) { throw "E_TEMPLATE_IDENTITY_MISSING：缺少模板身份校验脚本：$templateIdentityScript" }
 
     if ($NoUi) {
         Set-RunProgress -Stage '读取 Sheet 列表' -Detail '正在读取 Excel 中可处理的可见 Sheet。'
@@ -2478,6 +2480,15 @@ try {
     # The data preflight now supplies the actual layout scope to both JSX
     # scripts. This prevents a first run from converting unrelated designs.
     $profileJson = $selectedProfile | ConvertTo-Json -Depth 8 -Compress
+
+    Set-RunProgress -Stage '模板身份校验' -Detail '正在校验 PSD 与批准渠道模板身份是否完全一致。'
+    $identityOutput = @(Invoke-Python -Python $python -Arguments @(
+        $templateIdentityScript, '--psd', $psdPath, '--profile', $profileId, '--variant', $variantId
+    ) 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        throw "E_TEMPLATE_IDENTITY_MISMATCH：PSD 模板身份未通过。$($identityOutput -join '；')"
+    }
+    Add-Log "PSD 模板身份校验通过：$($identityOutput -join '')"
 
     Set-RunProgress -Stage '启动 Photoshop' -Detail '数据预检通过，正在连接 Photoshop 并准备打开模板。'
     $photoshop = Start-Photoshop
