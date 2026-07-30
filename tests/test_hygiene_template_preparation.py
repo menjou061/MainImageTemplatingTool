@@ -1,4 +1,4 @@
-"""Regression coverage for the hygiene template's three gift slots."""
+"""Regression coverage for the hygiene template's business-approved gift cards."""
 from __future__ import annotations
 
 import unittest
@@ -10,14 +10,35 @@ SCRIPT = ROOT / "L0_Windows命令行版" / "_internal" / "template_prepare.jsx"
 
 
 class HygieneTemplatePreparationTest(unittest.TestCase):
-    def test_gift_slots_keep_top_and_lower_pairs_in_business_order(self) -> None:
+    def test_750_gift_slots_target_the_approved_cards_in_business_order(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
 
-        self.assertIn('renameFirstText(topGiftCopy, "赠品文案1")', source)
-        self.assertIn('"@赠品文案" + (copyIndex + 2)', source)
-        self.assertIn('normalizeGiftSlot(document, giftGroups[0], "赠品图2")', source)
-        self.assertIn('normalizeGiftSlot(document, giftGroups[1], "赠品图3")', source)
-        self.assertIn("sortLayersByVisualPosition(giftGroups)", source)
+        start = source.index("function prepareHygieneTopAndBottomGiftCards")
+        end = source.index("function prepareHygieneLayoutGroup", start)
+        helper = source[start:end]
+        self.assertIn('findDirectGroup(topCard, "组 381")', helper)
+        self.assertIn('normalizeGiftSlot(document, topAsset, "赠品图1")', helper)
+        self.assertIn('findDirectGroup(bottomCard, "3QFC8202+QFC8802")', helper)
+        self.assertIn('normalizeGiftSlot(document, bottomAsset, "赠品图2")', helper)
+        self.assertNotIn('"赠品图3"', helper)
+
+    def test_750_preflight_checks_the_named_material_not_card_decorations(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+
+        start = source.index("function hygieneStructureProblems")
+        end = source.index("function hygieneSourceHasMultipleLayouts", start)
+        helper = source[start:end]
+        self.assertIn('var slotName = "!赠品图" + (switchIndex + 1)', helper)
+        self.assertIn("findNamedLayersWithin(card, slotName, layerIndex).length !== 1", helper)
+        self.assertNotIn("smartObjectLayersWithin(card).length !== 1", helper)
+
+    def test_switch_groups_are_checked_with_their_hash_prefix(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+
+        start = source.index("function hygieneProblems")
+        end = source.index("function hygieneStructureProblems", start)
+        helper = source[start:end]
+        self.assertIn('expectedGroups.push("#" + configuredSwitches[switchNameIndex])', helper)
 
     def test_fixed_gift_button_and_disclaimer_are_not_bound_to_row_data(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")

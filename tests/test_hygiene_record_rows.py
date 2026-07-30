@@ -58,8 +58,7 @@ class HygieneRecordRowsTest(unittest.TestCase):
             product = root / "product.png"
             gift_one = root / "gift-one.png"
             gift_two = root / "gift-two.png"
-            gift_three = root / "gift-three.png"
-            for path in (product, gift_one, gift_two, gift_three):
+            for path in (product, gift_one, gift_two):
                 path.touch()
             workbook_path = root / "hygiene.xlsx"
             output = root / "output"
@@ -72,8 +71,8 @@ class HygieneRecordRowsTest(unittest.TestCase):
                     "618预售品", "新超薄", "100%纯棉* 更干爽不黏腻", "*指棉面层",
                     "售卖07/18 00:00:00 - 07/19 23:59:59", str(product), "2套含赠到手242片", "2",
                     "58.3(第2套到手预估)=79.5（活动价）-2（入会领商品券）-19.2（官方立减12%）",
-                    "\n".join((str(gift_one), str(gift_two), str(gift_three))),
-                    "会员0元试用\n新会员0.01元拍下得\n直播间下单前100送", "",
+                    "\n".join((str(gift_one), str(gift_two))),
+                    "会员0元试用\n新会员0.01元拍下得", "",
                 ]
             )
             workbook.save(workbook_path)
@@ -93,8 +92,9 @@ class HygieneRecordRowsTest(unittest.TestCase):
             self.assertEqual(record["价格活动价"], "79.5")
             self.assertEqual(record["价格优惠券"], "2")
             self.assertEqual(record["价格立减"], "19.2")
-            self.assertEqual(record["赠品图3"], str(gift_three))
-            self.assertEqual(record["赠品文案3"], "直播间下单前100送")
+            self.assertEqual(record["赠品图1"], str(gift_one))
+            self.assertEqual(record["赠品图2"], str(gift_two))
+            self.assertEqual(record["赠品图3"], "")
             self.assertEqual(record["版式组"], "无代言人")
             self.assertFalse(error_path.read_text(encoding="utf-8-sig").splitlines()[1:])
 
@@ -320,6 +320,36 @@ class HygieneRecordRowsTest(unittest.TestCase):
                 error = next(csv.DictReader(handle))
             self.assertEqual(error["错误码"], "E_GIFT_PAIR_MISMATCH")
             self.assertIn("一一对应", error["建议动作"])
+
+    def test_750_rejects_a_third_gift_card_before_photoshop_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            product = root / "product.png"
+            gifts = [root / f"gift-{index}.png" for index in range(1, 4)]
+            for path in [product] + gifts:
+                path.touch()
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "出图数据"
+            sheet.append(clean_data.RECORD_ROW_HEADERS)
+            sheet.append([
+                "618", "新超薄", "卖点", "", "07/07-07/09", str(product), "2套到手88片", "2",
+                "41.3(到手)=51.3（活动价）-10（官方立减）",
+                "\n".join(str(path) for path in gifts), "赠品一\n赠品二\n赠品三", "",
+            ])
+            workbook_path = root / "three-gifts.xlsx"
+            workbook.save(workbook_path)
+
+            count, errors, _, _, error_path = clean_data.build_data(
+                workbook_path, "出图数据", root / "output", None,
+                profile_id="hygiene-tmall-v1.2", variant="main-750",
+            )
+
+            self.assertEqual((count, errors), (0, 1))
+            with error_path.open(encoding="utf-8-sig", newline="") as handle:
+                error = next(csv.DictReader(handle))
+            self.assertEqual(error["错误码"], "E_GIFT_PAIR_MISMATCH")
+            self.assertIn("超过2项", error["异常详情"])
 
 
 if __name__ == "__main__":

@@ -421,7 +421,7 @@ def price_text(value: Any, *, currency: bool = False) -> str:
 
 
 def row_from_standard_record(
-    values: dict[str, str], variant: str, output_label: str | None = None
+    values: dict[str, str], variant: str, output_label: str | None = None, gift_slot_count: int = 3
 ) -> dict[str, str]:
     gift_paths = split_lines(values.get("赠品素材路径", ""))
     gift_copy = split_lines(values.get("赠品文案", ""))
@@ -476,10 +476,10 @@ def row_from_standard_record(
             record["预检异常"],
             f"E_GIFT_LAYOUT_UNSUPPORTED:暂不支持自动处理赠品版式“{gift_layout}”，请留空",
         )
-    if len(gift_paths) != len(gift_copy) or len(gift_paths) > 3:
+    if len(gift_paths) != len(gift_copy) or len(gift_paths) > gift_slot_count:
         record["预检异常"] = append_issue(
             record["预检异常"],
-            "E_GIFT_PAIR_MISMATCH:赠品素材与文案数量不一致或超过3项",
+            f"E_GIFT_PAIR_MISMATCH:赠品素材与文案数量不一致或超过{gift_slot_count}项",
         )
     for index in range(3):
         record[f"赠品图{index + 1}"] = normalize_image_reference(gift_paths[index]) if index < len(gift_paths) else ""
@@ -487,7 +487,7 @@ def row_from_standard_record(
     return record
 
 
-def row_from_record(ws, row_number: int, headers: list[str]) -> dict[str, str]:
+def row_from_record(ws, row_number: int, headers: list[str], gift_slot_count: int = 3) -> dict[str, str]:
     values = {headers[index]: as_text(ws.cell(row_number, index + 1).value) for index in range(len(headers))}
     record: dict[str, str] = {
         "活动": values.get("活动", ""),
@@ -504,8 +504,8 @@ def row_from_record(ws, row_number: int, headers: list[str]) -> dict[str, str]:
     record.update(split_price_bar(values.get("价格条", "")))
     gift_paths = split_lines(values.get("赠品路径", ""))
     gift_copy = split_lines(values.get("赠品文案", ""))
-    if len(gift_paths) != len(gift_copy) or len(gift_paths) > 3:
-        record["预检异常"] = "E_GIFT_PAIR_MISMATCH:赠品素材与文案数量不一致或超过3项"
+    if len(gift_paths) != len(gift_copy) or len(gift_paths) > gift_slot_count:
+        record["预检异常"] = f"E_GIFT_PAIR_MISMATCH:赠品素材与文案数量不一致或超过{gift_slot_count}项"
     for index in range(3):
         record[f"赠品图{index + 1}"] = normalize_image_reference(gift_paths[index]) if index < len(gift_paths) else ""
         record[f"赠品文案{index + 1}"] = gift_copy[index] if index < len(gift_copy) else ""
@@ -621,6 +621,9 @@ def build_record_rows(
     required_fields = set(profile.get("record_required_fields", [
         "活动时间", "卖点", "片数套", "片数数量", "到手", "价格活动价",
     ]))
+    gift_slot_count = int(profile.get("record_layout", {}).get("gift_slots", 3))
+    if gift_slot_count < 1 or gift_slot_count > 3:
+        raise ProfileError("E_CONFIG_MISMATCH", "赠品槽位数必须在 1 到 3 之间")
     records: list[dict[str, str]] = []
     record_source_rows: list[int] = []
     seen_products: dict[str, int] = {}
@@ -635,6 +638,7 @@ def build_record_rows(
                 values,
                 str(profile["variant"]),
                 str(profile.get("output_label", "")),
+                gift_slot_count,
             )
             if record.pop("_跳过", ""):
                 continue
@@ -649,7 +653,7 @@ def build_record_rows(
                 record["预检异常"] = append_issue(channel_issue, existing_issue) if existing_issue else channel_issue
             product = record.get("商品文件名", "")
         else:
-            record = row_from_record(ws, row_number, headers)
+            record = row_from_record(ws, row_number, headers, gift_slot_count)
             activity = record.get("活动", "") or "未命名活动"
             series = record.get("系列", "") or "未命名系列"
             product = f"{activity}_{series}_{row_number - header_row:02d}"

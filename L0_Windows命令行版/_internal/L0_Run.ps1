@@ -513,6 +513,10 @@ function Save-UserSettings {
         productName = $ProductName
         updatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
     }
+    $timeoutSetting = Get-SettingText -Settings $script:Settings -Name 'photoshopTimeoutSeconds'
+    if (-not [string]::IsNullOrWhiteSpace($timeoutSetting)) {
+        $payload | Add-Member -NotePropertyName 'photoshopTimeoutSeconds' -NotePropertyValue $timeoutSetting
+    }
     try {
         $json = $payload | ConvertTo-Json -Depth 4
         Write-Utf8Bom -Path $settingsPath -Content ($json + [Environment]::NewLine)
@@ -1790,14 +1794,12 @@ function Get-PhotoshopReadiness {
             Detail = "Photoshop 进程无响应；进程 ID $($photoshopProcess.Id)。"
         }
     }
+    # Photoshop 2026 can report a zero MainWindowHandle while its interactive
+    # window is already visible. The COM probe below is the authoritative
+    # check, so retain this only as task-record context instead of blocking.
+    $windowWarning = ''
     if ([int64]$photoshopProcess.MainWindowHandle -eq 0) {
-        return [pscustomobject]@{
-            Ready = $false
-            Code = 'PS_NOT_READY'
-            Version = ''
-            Message = 'Photoshop 正在启动或尚未显示首页。请处理登录、授权或弹窗，进入首页后再试。'
-            Detail = "Photoshop 进程存在但没有主窗口；进程 ID $($photoshopProcess.Id)。"
-        }
+        $windowWarning = 'W_PS_WINDOW_HANDLE_UNAVAILABLE：未读取到 Photoshop 主窗口句柄，将继续验证 COM 自动化接口。'
     }
 
     $version = ''
@@ -1831,7 +1833,8 @@ function Get-PhotoshopReadiness {
         Code = 'PS_READY'
         Version = $version
         Message = "Photoshop $version 已就绪。"
-        Detail = "进程 ID $($photoshopProcess.Id)；主窗口句柄 $($photoshopProcess.MainWindowHandle)。"
+        Detail = "进程 ID $($photoshopProcess.Id)；主窗口句柄 $($photoshopProcess.MainWindowHandle)。$windowWarning"
+        Warning = $windowWarning
     }
 }
 
@@ -1839,6 +1842,9 @@ function Start-Photoshop {
     $readiness = Get-PhotoshopReadiness
     if (-not $readiness.Ready) {
         throw "$($readiness.Message) 错误码：$($readiness.Code)。"
+    }
+    if (-not [string]::IsNullOrWhiteSpace([string]$readiness.Warning)) {
+        Add-Log "Photoshop 前置提示：$($readiness.Warning)"
     }
     foreach ($progId in Get-PhotoshopComProgIds) {
         try {
@@ -1864,12 +1870,19 @@ function Invoke-PhotoshopJavaScript {
     if ($progIds.Count -eq 0) {
         throw 'E_PHOTOSHOP_UNAVAILABLE：未找到 Photoshop COM ProgID。'
     }
+    # A PowerShell job serializes nested arrays inconsistently. Pass one
+    # newline-delimited scalar and rebuild the exact ProgID list in the job.
+    $progIdPayload = (($progIds | ForEach-Object { [string]$_ }) -join "`n")
     $job = $null
     try {
         $job = Start-Job -ScriptBlock {
-            param($candidateProgIds, $jsx)
+            param([string]$candidateProgIdPayload, [string]$jsx)
             $lastError = ''
-            foreach ($candidateProgId in @($candidateProgIds)) {
+            $candidateProgIds = @(
+                ($candidateProgIdPayload -split "`n") |
+                    Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+            )
+            foreach ($candidateProgId in $candidateProgIds) {
                 try {
                     $app = New-Object -ComObject $candidateProgId -ErrorAction Stop
                     try {
@@ -1882,7 +1895,7 @@ function Invoke-PhotoshopJavaScript {
                 }
             }
             throw "DoJavaScript 调用失败：$lastError"
-        } -ArgumentList (,$progIds), $ScriptText -ErrorAction Stop
+        } -ArgumentList $progIdPayload, $ScriptText -ErrorAction Stop
         $deadline = (Get-Date).AddSeconds($timeout)
         while ($job.State -eq 'Running' -and (Get-Date) -lt $deadline) {
             Wait-Job -Job $job -Timeout 1 | Out-Null
@@ -2205,6 +2218,12 @@ try {
     if ($selectedVariant.required_psd_variables) {
         $selectedProfile | Add-Member -NotePropertyName required_psd_variables -NotePropertyValue $selectedVariant.required_psd_variables -Force
     }
+    if ($selectedVariant.record_layout) {
+        $selectedProfile | Add-Member -NotePropertyName record_layout -NotePropertyValue $selectedVariant.record_layout -Force
+    }
+    if ($selectedVariant.text_fit) {
+        $selectedProfile | Add-Member -NotePropertyName text_fit -NotePropertyValue $selectedVariant.text_fit -Force
+    }
     $profileJson = $selectedProfile | ConvertTo-Json -Depth 8 -Compress
     Add-Log "Profile：$profileId@$($selectedProfile.profile_version)，variant：$variantId，目标尺寸：$($selectedVariant.width)x$($selectedVariant.height)"
 
@@ -2269,6 +2288,8 @@ try {
         if ($selectedVariant.export_size) { $selectedProfile | Add-Member -NotePropertyName export_size -NotePropertyValue $selectedVariant.export_size -Force }
         if ($selectedVariant.template_bindings) { $selectedProfile | Add-Member -NotePropertyName template_bindings -NotePropertyValue $selectedVariant.template_bindings -Force }
         if ($selectedVariant.required_psd_variables) { $selectedProfile | Add-Member -NotePropertyName required_psd_variables -NotePropertyValue $selectedVariant.required_psd_variables -Force }
+        if ($selectedVariant.record_layout) { $selectedProfile | Add-Member -NotePropertyName record_layout -NotePropertyValue $selectedVariant.record_layout -Force }
+        if ($selectedVariant.text_fit) { $selectedProfile | Add-Member -NotePropertyName text_fit -NotePropertyValue $selectedVariant.text_fit -Force }
         $profileJson = $selectedProfile | ConvertTo-Json -Depth 8 -Compress
         Add-Log "按 Sheet 匹配规格：$sheetName -> $variantId（$($selectedVariant.width)x$($selectedVariant.height)）"
     }
@@ -2458,7 +2479,7 @@ try {
     # scripts. This prevents a first run from converting unrelated designs.
     $profileJson = $selectedProfile | ConvertTo-Json -Depth 8 -Compress
 
-    Set-RunProgress -Stage '启动 Photoshop' -Detail '数据预检通过，已连接 Photoshop，准备打开模板。'
+    Set-RunProgress -Stage '启动 Photoshop' -Detail '数据预检通过，正在连接 Photoshop 并准备打开模板。'
     $photoshop = Start-Photoshop
     $preparedPsdPath = Resolve-TemplateForTask -Application $photoshop -TemplatePath $psdPath
     if ($preparedPsdPath -ne $psdPath) {

@@ -169,6 +169,17 @@ function findDirectGroup(container, name) {
     return null;
 }
 
+function findDirectGroupsByTrimmedName(container, name) {
+    var matches = [];
+    for (var index = 0; index < container.layers.length; index++) {
+        var layer = container.layers[index];
+        if (layer.typename === "LayerSet" && trimText(layer.name) === name) {
+            matches.push(layer);
+        }
+    }
+    return matches;
+}
+
 function textLayersWithin(container) {
     var all = [];
     var text = [];
@@ -225,6 +236,16 @@ function hygieneLayoutGroupNames() {
     return configured || [];
 }
 
+function hygieneGiftSwitchNames() {
+    var configured = CHANNEL_PROFILE && CHANNEL_PROFILE.record_layout && CHANNEL_PROFILE.record_layout.gift_switches;
+    return configured && configured.length ? configured : ["赠品顶部", "赠品区域"];
+}
+
+function hygieneGiftSlotCount() {
+    var configured = CHANNEL_PROFILE && CHANNEL_PROFILE.record_layout && Number(CHANNEL_PROFILE.record_layout.gift_slots);
+    return configured > 0 ? configured : 3;
+}
+
 function inactiveHygieneLayouts(document, layerIndex) {
     var configured = CHANNEL_PROFILE && CHANNEL_PROFILE.record_layout && CHANNEL_PROFILE.record_layout.groups;
     var active = hygieneLayoutGroupNames();
@@ -252,8 +273,16 @@ function inactiveHygieneLayouts(document, layerIndex) {
 }
 
 function hygieneProblems(document, layerIndex) {
-    var expected = ["!商品图", "@卖点", "@备注", "@片数套", "@片数数量", "@到手标签", "@到手", "@价格活动价", "@价格活动价副标", "@价格优惠券", "@价格优惠券副标", "@价格立减", "@赠品文案1", "@赠品文案2", "@赠品文案3", "!赠品图1", "!赠品图2", "!赠品图3"];
-    var expectedGroups = ["#赠品顶部", "#赠品区域"];
+    var expected = [];
+    var required = CHANNEL_PROFILE && CHANNEL_PROFILE.required_psd_variables || [];
+    for (var requiredIndex = 0; requiredIndex < required.length; requiredIndex++) {
+        expected.push((required[requiredIndex].type === "text" ? "@" : "!") + required[requiredIndex].name);
+    }
+    var configuredSwitches = hygieneGiftSwitchNames();
+    var expectedGroups = [];
+    for (var switchNameIndex = 0; switchNameIndex < configuredSwitches.length; switchNameIndex++) {
+        expectedGroups.push("#" + configuredSwitches[switchNameIndex]);
+    }
     var problems = [];
     var configured = hygieneLayoutGroupNames();
     for (var layoutIndex = 0; configured && layoutIndex < configured.length; layoutIndex++) {
@@ -296,6 +325,19 @@ function hygieneStructureProblems(document, layerIndex) {
         var layouts = findNamedLayers(document, groups[layoutIndex], layerIndex);
         if (layouts.length !== 1 || layouts[0].typename !== "LayerSet") { continue; }
         var layout = layouts[0];
+        if (hygieneGiftSlotCount() === 2) {
+            var switchNames = hygieneGiftSwitchNames();
+            for (var switchIndex = 0; switchIndex < switchNames.length; switchIndex++) {
+                var card = findFirstGroup(layout, "#" + switchNames[switchIndex], layerIndex);
+                var slotName = "!赠品图" + (switchIndex + 1);
+                // A business card can retain decorative smart objects. Only
+                // the explicitly bound material field controls replacement.
+                if (card && findNamedLayersWithin(card, slotName, layerIndex).length !== 1) {
+                    problems.push("E_GIFT_SLOT_MULTIPLE: " + groups[layoutIndex] + "/#" + switchNames[switchIndex]);
+                }
+            }
+            continue;
+        }
         var topGift = findDirectGroup(layout, "#赠品顶部");
         if (topGift && smartObjectLayersWithin(topGift).length !== 1) {
             problems.push("E_GIFT_SLOT_MULTIPLE: " + groups[layoutIndex] + "/#赠品顶部");
@@ -606,6 +648,92 @@ function normalizeGiftSlot(document, slotGroup, targetName) {
     convertToSmartObject(document, slotGroup, targetName);
 }
 
+function prepareHygieneTwoGiftCards(document, layoutGroup) {
+    var cards = findDirectGroupsByTrimmedName(layoutGroup, "赠品");
+    sortLayersByVisualPosition(cards);
+    if (cards.length !== 2) {
+        throw new Error("E_CONFIG_MISMATCH: 800 模板需要 2 个独立顶部赠品卡片，当前有 " + cards.length + " 个");
+    }
+    for (var cardIndex = 0; cardIndex < cards.length; cardIndex++) {
+        var card = cards[cardIndex];
+        var copy = [];
+        var text = textLayersWithin(card);
+        for (var textIndex = 0; textIndex < text.length; textIndex++) {
+            var textName = trimText(text[textIndex].name);
+            if (textName !== "买2赠" && textName !== "买就送") {
+                copy.push(text[textIndex]);
+            }
+        }
+        if (copy.length !== 1) {
+            throw new Error("E_CONFIG_MISMATCH: 800 赠品卡片 " + (cardIndex + 1) + " 需要 1 个动态文案图层，当前有 " + copy.length + " 个");
+        }
+        renameFirstText(copy, "赠品文案" + (cardIndex + 1));
+        var assetGroups = [];
+        for (var childIndex = 0; childIndex < card.layers.length; childIndex++) {
+            if (card.layers[childIndex].typename === "LayerSet") {
+                assetGroups.push(card.layers[childIndex]);
+            }
+        }
+        if (assetGroups.length !== 1) {
+            throw new Error("E_CONFIG_MISMATCH: 800 赠品卡片 " + (cardIndex + 1) + " 需要 1 个可替换素材组，当前有 " + assetGroups.length + " 个");
+        }
+        normalizeGiftSlot(document, assetGroups[0], "赠品图" + (cardIndex + 1));
+        card.name = "#赠品槽位" + (cardIndex + 1);
+    }
+}
+
+function prepareHygieneTopAndBottomGiftCards(document, layoutGroup, layoutIndex) {
+    var topCards = findDirectGroupsByTrimmedName(layoutGroup, "赠品");
+    if (topCards.length !== 1) {
+        throw new Error("E_CONFIG_MISMATCH: 750 模板需要 1 个顶部赠品卡片，当前有 " + topCards.length + " 个");
+    }
+    var topCard = topCards[0];
+    var topCopy = [];
+    var topText = textLayersWithin(topCard);
+    for (var topTextIndex = 0; topTextIndex < topText.length; topTextIndex++) {
+        if (trimText(topText[topTextIndex].name) !== "买就送") {
+            topCopy.push(topText[topTextIndex]);
+        }
+    }
+    if (topCopy.length !== 1) {
+        throw new Error("E_CONFIG_MISMATCH: 750 顶部赠品需要 1 个动态文案图层，当前有 " + topCopy.length + " 个");
+    }
+    renameFirstText(topCopy, "赠品文案1");
+    // The approved 750 PSD has decoration groups alongside the actual asset.
+    // Bind its named material group rather than treating every nested group as
+    // a candidate. This preserves the card frame and prevents stale material.
+    var topAsset = findDirectGroup(topCard, "组 381");
+    if (!topAsset) {
+        throw new Error("E_CONFIG_MISMATCH: 750 顶部赠品缺少素材组“组 381”");
+    }
+    normalizeGiftSlot(document, topAsset, "赠品图1");
+    topCard.name = "#赠品顶部";
+
+    var bottom = findFirstGroup(layoutGroup, "下帖", layoutIndex);
+    var bottomCard = bottom ? findDirectGroup(bottom, "赠品") : null;
+    if (!bottomCard) {
+        throw new Error("E_CONFIG_MISMATCH: 750 模板缺少下方组合赠品卡片");
+    }
+    var bottomCopy = [];
+    var bottomText = textLayersWithin(bottomCard);
+    for (var bottomTextIndex = 0; bottomTextIndex < bottomText.length; bottomTextIndex++) {
+        var bottomName = trimText(bottomText[bottomTextIndex].name);
+        if (bottomName !== "买2赠" && bottomName.charAt(0) !== "*") {
+            bottomCopy.push(bottomText[bottomTextIndex]);
+        }
+    }
+    if (bottomCopy.length !== 1) {
+        throw new Error("E_CONFIG_MISMATCH: 750 下方组合赠品需要 1 个动态文案图层，当前有 " + bottomCopy.length + " 个");
+    }
+    renameFirstText(bottomCopy, "赠品文案2");
+    var bottomAsset = findDirectGroup(bottomCard, "3QFC8202+QFC8802");
+    if (!bottomAsset) {
+        throw new Error("E_CONFIG_MISMATCH: 750 下方组合赠品缺少组合素材组“3QFC8202+QFC8802”");
+    }
+    normalizeGiftSlot(document, bottomAsset, "赠品图2");
+    bottomCard.name = "#赠品区域";
+}
+
 function prepareHygieneLayoutGroup(document, layoutGroup) {
     var layoutIndex = buildLayerIndex(layoutGroup);
     var product = findFirstGroup(layoutGroup, "产品", layoutIndex);
@@ -669,6 +797,24 @@ function prepareHygieneLayoutGroup(document, layoutGroup) {
     var priceBadge = bottom ? findFirstGroup(bottom, "组 359", layoutIndex) : null;
     var badgeText = priceBadge ? textLayersWithin(priceBadge) : [];
     renameLargeSmallText(badgeText, "到手", "到手标签");
+
+    if (hygieneGiftSlotCount() === 2) {
+        var giftLayout = CHANNEL_PROFILE && CHANNEL_PROFILE.record_layout && CHANNEL_PROFILE.record_layout.gift_layout;
+        if (giftLayout === "two_top_cards") {
+            prepareHygieneTwoGiftCards(document, layoutGroup);
+        } else {
+            prepareHygieneTopAndBottomGiftCards(document, layoutGroup, layoutIndex);
+        }
+        var ambassador800 = findFirstGroup(layoutGroup, "代言人", layoutIndex);
+        if (ambassador800) {
+            var ambassadorLayers800 = artLayersWithin(ambassador800);
+            if (ambassadorLayers800.length > 0) {
+                renameGiftImage(document, ambassadorLayers800[0], "代言IP");
+                ambassador800.name = "#代言IP";
+            }
+        }
+        return;
+    }
 
     var topGift = findDirectGroup(layoutGroup, "赠品");
     var topGiftLayers = topGift ? smartObjectLayersWithin(topGift) : [];
