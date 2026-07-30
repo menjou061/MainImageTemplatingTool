@@ -65,7 +65,7 @@ class HygieneRecordRowsTest(unittest.TestCase):
             output = root / "output"
             workbook = Workbook()
             sheet = workbook.active
-            sheet.title = "出图数据"
+            sheet.title = "跑批数据"
             sheet.append(clean_data.RECORD_ROW_HEADERS)
             sheet.append(
                 [
@@ -79,7 +79,7 @@ class HygieneRecordRowsTest(unittest.TestCase):
             workbook.save(workbook_path)
 
             count, errors, data_path, _, error_path = clean_data.build_data(
-                workbook_path, "出图数据", output, None, profile_id="hygiene-tmall-v1.2", variant="main-750"
+                workbook_path, "跑批数据", output, None, profile_id="hygiene-tmall-v1.2", variant="main-750"
             )
 
             self.assertEqual((count, errors), (1, 0))

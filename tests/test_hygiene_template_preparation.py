@@ -63,6 +63,7 @@ class HygieneTemplatePreparationTest(unittest.TestCase):
         source = SCRIPT.read_text(encoding="utf-8")
 
         self.assertIn("function inactiveHygieneLayouts(document, layerIndex)", source)
+        self.assertIn("function hygieneSourceHasMultipleLayouts(document)", source)
         self.assertIn('status: "BLOCKED_PREP_REQUIRED"', source)
         self.assertIn("E_TEMPLATE_PREP_REQUIRED", source)
         self.assertNotIn("function removeInactiveHygieneLayouts", source)

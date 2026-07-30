@@ -320,6 +320,19 @@ function hygieneStructureProblems(document, layerIndex) {
     return problems;
 }
 
+function hygieneSourceHasMultipleLayouts(document) {
+    // Business PSDs commonly keep one top-level group per SKU/layout. Do not
+    // attempt automatic mapping on that source; only a fully standardized
+    // sibling copy may pass the normal READY path above.
+    var topLevelGroups = 0;
+    for (var index = 0; index < document.layers.length; index++) {
+        if (document.layers[index].typename === "LayerSet") {
+            topLevelGroups++;
+        }
+    }
+    return topLevelGroups > 1;
+}
+
 function expectedVariableKind(type) {
     return type === "text" ? VariableKind.TEXT : VariableKind.PIXELREPLACEMENT;
 }
@@ -476,7 +489,7 @@ function inspectPreparation(document, layerIndex) {
                 "模板只包含本次任务版式。";
             return { status: "READY", message: "卫品天猫官旗 750 字段已通过体检；" + layoutMessage };
         }
-        if (inactiveLayouts.length > 0) {
+        if (inactiveLayouts.length > 0 || hygieneSourceHasMultipleLayouts(document)) {
             return {
                 status: "BLOCKED_PREP_REQUIRED",
                 message: "E_TEMPLATE_PREP_REQUIRED：模板包含多套版式且字段未标准化。请由业务方先生成并确认标准副本（文件名建议为原文件名_套版模板.psd），设计师不要在跑批时自动改造原始 PSD。"

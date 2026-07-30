@@ -13,7 +13,12 @@ class ProfileError(ValueError):
 
 
 def get_variant_for_sheet(profile: dict[str, Any], sheet_name: str) -> str:
-    """Resolve the single output variant selected by a visible Excel sheet."""
+    """Resolve a variant while allowing business-defined record-row Sheet names.
+
+    Profiles with explicitly named variants keep strict Sheet-to-variant
+    matching. Profiles without named variants use their default variant; the
+    selected Sheet is then validated against the profile's header contract.
+    """
     variants = profile.get("variants", {})
     named = {
         variant_id: config.get("sheet_name")

@@ -77,10 +77,10 @@ class ChannelProfileTest(unittest.TestCase):
         self.assertEqual(profile["variant_selection"], "sheet")
         self.assertNotIn("batch_variants", profile)
         self.assertEqual(get_variant_for_sheet(profile, "出图数据"), "main-750")
+        self.assertEqual(get_variant_for_sheet(profile, "跑批数据"), "main-750")
+        self.assertNotIn("sheet_name", profile["variants"]["main-750"])
         self.assertNotIn("main-800", profile["variants"])
         self.assertEqual(profile["pending_variants"]["main-800"]["status"], "pending_asset_approval")
-        with self.assertRaisesRegex(ProfileError, "E_PROFILE_SHEET_MISMATCH"):
-            get_variant_for_sheet(profile, "卫品-800")
 
     def test_enabled_category_channel_combinations_are_complete_and_unique(self) -> None:
         enabled = [profile for profile in load_profiles().values() if profile["status"] == "enabled"]
