@@ -2152,7 +2152,7 @@ function Get-VariantForSheet {
         [object]$ProfileConfig,
         [string]$SheetName,
         [string]$ExcelPath = '',
-        [string]$Python = ''
+        [object]$Python = $null
     )
     $namedVariants = @($ProfileConfig.variants.PSObject.Properties | Where-Object {
         $_.Value -and -not [string]::IsNullOrWhiteSpace([string]$_.Value.sheet_name)
