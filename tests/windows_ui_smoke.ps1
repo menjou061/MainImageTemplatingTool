@@ -282,7 +282,12 @@ try {
         throw "未找到用户启动入口：$entry"
     }
     $arguments = '/d /c call "{0}"' -f $entry
-    $process = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\cmd.exe') -ArgumentList $arguments -WindowStyle Normal -PassThru
+    $process = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\cmd.exe') -ArgumentList $arguments -WorkingDirectory $ToolRoot -WindowStyle Normal -PassThru
+    Start-Sleep -Milliseconds 750
+    Write-SmokeLog ("入口进程：PID=$($process.Id)，已退出=$($process.HasExited)，工作目录=$ToolRoot")
+    if ($process.HasExited) {
+        throw "工具入口启动后立即退出，退出码：$($process.ExitCode)"
+    }
 
     $channelWindow = Wait-DesktopWindow -Title '选择品类和渠道' -TimeoutSeconds 45
     Show-AutomationWindow -Window $channelWindow
