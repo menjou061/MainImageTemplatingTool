@@ -1105,6 +1105,11 @@ function applyRecord(document, record, materialIndex, result) {
     selectRecordLayout(document, record);
     var layerIndex = { text: {}, image: {}, switches: {} };
     addLayers(ACTIVE_LAYOUT_GROUP || document, layerIndex);
+    var bindingWarnings = recordBindingWarnings(layerIndex, record);
+    for (var warningIndex = 0; warningIndex < bindingWarnings.length; warningIndex++) {
+        addDataPrecheckWarning(result, bindingWarnings[warningIndex]);
+    }
+    disableUnboundOptionalGroups(layerIndex, record, bindingWarnings);
     var bindingErrors = recordBindingErrors(layerIndex, record);
     if (bindingErrors.length) {
         result.templateInvalid = true;
@@ -1150,12 +1155,66 @@ function recordBindingErrors(layerIndex, record) {
         if (collection[required.name] && collection[required.name].length > 0) {
             continue;
         }
-        if ((isOptionalProfileVariable(required) || dataFieldsOptional()) && isBlank(record[required.name])) {
+        if (isOptionalProfileVariable(required)) {
+            // Optional PSD variables may be absent from an older template. A
+            // populated source field is reported as a warning and ignored by
+            // recordBindingWarnings; it must not fail the whole batch.
+            continue;
+        }
+        if (dataFieldsOptional() && isBlank(record[required.name])) {
             continue;
         }
         errors.push("PSD 变量缺失：" + required.name + "（当前商品有对应数据）");
     }
     return errors;
+}
+
+function recordBindingWarnings(layerIndex, record) {
+    if (!CHANNEL_PROFILE || !CHANNEL_PROFILE.required_psd_variables) {
+        return [];
+    }
+    var warnings = [];
+    for (var index = 0; index < CHANNEL_PROFILE.required_psd_variables.length; index++) {
+        var required = CHANNEL_PROFILE.required_psd_variables[index];
+        if (!isOptionalProfileVariable(required)) {
+            continue;
+        }
+        var collection = required.type === "text" ? layerIndex.text : layerIndex.image;
+        if (collection[required.name] && collection[required.name].length > 0) {
+            continue;
+        }
+        if (!isBlank(record[required.name])) {
+            warnings.push("模板未绑定可选字段：" + required.name + "；已忽略表格值");
+        }
+    }
+    return warnings;
+}
+
+function disableUnboundOptionalGroups(layerIndex, record, warnings) {
+    var couponUnbound = false;
+    for (var index = 0; index < warnings.length; index++) {
+        if (warnings[index].indexOf("可选字段：券名") >= 0 ||
+            warnings[index].indexOf("可选字段：折扣") >= 0 ||
+            warnings[index].indexOf("可选字段：券门槛") >= 0) {
+            couponUnbound = true;
+            break;
+        }
+    }
+    if (!couponUnbound) {
+        return;
+    }
+    var switchKeys = ["优惠券开关", "优惠券"];
+    for (var keyIndex = 0; keyIndex < switchKeys.length; keyIndex++) {
+        var groups = layerIndex.switches[switchKeys[keyIndex]];
+        if (!groups) {
+            continue;
+        }
+        for (var groupIndex = 0; groupIndex < groups.length; groupIndex++) {
+            groups[groupIndex].visible = false;
+        }
+    }
+    record["优惠券开关"] = "否";
+    record["优惠券"] = "否";
 }
 
 function applyPhotoshopVariables(document, record, materialIndex, result) {

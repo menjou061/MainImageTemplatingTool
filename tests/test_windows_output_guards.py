@@ -71,6 +71,18 @@ class WindowsOutputGuardTest(unittest.TestCase):
         self.assertLess(integrity_index, move_index)
         self.assertLess(integrity_index, success_index)
 
+    def test_optional_template_fields_warn_without_failing_batch(self) -> None:
+        batch_source = (
+            ROOT / "L0_Windows命令行版" / "_internal" / "batch_template.jsx"
+        ).read_text(encoding="utf-8-sig")
+        self.assertIn("recordBindingWarnings(layerIndex, record)", batch_source)
+        self.assertIn("模板未绑定可选字段：", batch_source)
+        self.assertIn("if (isOptionalProfileVariable(required))", batch_source)
+        self.assertIn(
+            "disableUnboundOptionalGroups(layerIndex, record, bindingWarnings)",
+            batch_source,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
