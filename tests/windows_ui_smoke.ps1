@@ -151,6 +151,31 @@ function Set-ControlValue {
     $pattern.SetValue($Value)
 }
 
+function Set-CheckedListItem {
+    param([System.Windows.Automation.AutomationElement]$Item)
+    if (-not $Item) { throw '未找到要勾选的商品。' }
+
+    # WinForms CheckedListBox exposes selection and check state separately.
+    # SelectionItemPattern.Select() only paints the row highlight, so use the
+    # checkbox hit area and validate the accessible checked state afterwards.
+    $rectangle = $Item.Current.BoundingRectangle
+    if ($rectangle.Width -le 0 -or $rectangle.Height -le 0) {
+        throw '商品复选框不可见，无法勾选。'
+    }
+    [void][NativeMouse]::SetCursorPos([int]($rectangle.X + 8), [int]($rectangle.Y + ($rectangle.Height / 2)))
+    [NativeMouse]::mouse_event([NativeMouse]::LeftDown, 0, 0, 0, [UIntPtr]::Zero)
+    [NativeMouse]::mouse_event([NativeMouse]::LeftUp, 0, 0, 0, [UIntPtr]::Zero)
+    Start-Sleep -Milliseconds 500
+
+    $legacyState = [int]$Item.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::LegacyIAccessibleStateProperty)
+    # STATE_SYSTEM_CHECKED is 0x10. Keep the raw state in the log so a future
+    # Windows accessibility-provider change remains diagnosable.
+    Write-SmokeLog ("商品复选框可访问性状态：0x{0:X}" -f $legacyState)
+    if (($legacyState -band 0x10) -eq 0) {
+        throw '商品未进入已勾选状态。'
+    }
+}
+
 function Capture-Desktop {
     param([string]$Name)
     $bounds = [System.Windows.Forms.SystemInformation]::VirtualScreen
@@ -265,14 +290,8 @@ try {
         ))
     ))
     if ($productItems.Count -lt 1) { throw '商品列表没有可选商品。' }
-    try {
-        $productItems[0].GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
-    } catch {
-        $productListControl.SetFocus()
-        [System.Windows.Forms.SendKeys]::SendWait('{HOME}')
-        [System.Windows.Forms.SendKeys]::SendWait(' ')
-    }
-    Start-Sleep -Seconds 1
+    Set-CheckedListItem -Item $productItems[0]
+    Start-Sleep -Milliseconds 500
     Capture-Desktop -Name '03-商品已勾选.png'
 
     if (-not $UseSingleProduct) {
