@@ -471,17 +471,20 @@ function inspectPreparation(document, layerIndex) {
         var hygieneIssues = hygieneProblems(document, scopedIndex);
         var inactiveLayouts = inactiveHygieneLayouts(document, scopedIndex);
         if (hygieneIssues.length === 0) {
-            if (inactiveLayouts.length > 0) {
-                return {
-                    status: "NEEDS_ISOLATION",
-                    message: "本次版式字段已通过体检，但模板包含 " + inactiveLayouts.length + " 个未使用版式；将只保留本次任务版式的副本。"
-                };
-            }
-            return { status: "READY", message: "卫品天猫官旗 750 本次任务版式已通过体检。" };
+            var layoutMessage = inactiveLayouts.length > 0 ?
+                "模板包含 " + inactiveLayouts.length + " 个未使用版式，本次只读取选中版式。" :
+                "模板只包含本次任务版式。";
+            return { status: "READY", message: "卫品天猫官旗 750 字段已通过体检；" + layoutMessage };
+        }
+        if (inactiveLayouts.length > 0) {
+            return {
+                status: "BLOCKED_PREP_REQUIRED",
+                message: "E_TEMPLATE_PREP_REQUIRED：模板包含多套版式且字段未标准化。请由业务方先生成并确认标准副本（文件名建议为原文件名_套版模板.psd），设计师不要在跑批时自动改造原始 PSD。"
+            };
         }
         return {
             status: "NEEDS_PREP",
-            message: "已识别卫品天猫官旗 750 模板，仅会改造本次任务版式的字段图层；未使用版式会从任务副本移除。"
+            message: "已识别单版式卫品天猫官旗 750 模板，仅会在副本中建立本次任务字段映射。"
         };
     }
     var existing = templateProblems(document);
@@ -743,16 +746,6 @@ function prepareHygieneTemplate(document, layerIndex) {
     }
 }
 
-function removeInactiveHygieneLayouts(document, layerIndex) {
-    var inactive = inactiveHygieneLayouts(document, layerIndex);
-    var removed = [];
-    for (var index = inactive.length - 1; index >= 0; index--) {
-        inactive[index].layer.remove();
-        removed.push(inactive[index].name);
-    }
-    return removed;
-}
-
 function prepareTemplate(document, inspection, layerIndex) {
     if (inspection.status === "READY") {
         return inspection;
@@ -760,23 +753,17 @@ function prepareTemplate(document, inspection, layerIndex) {
     if (inspection.status === "AMBIGUOUS") {
         return inspection;
     }
+    if (inspection.status === "BLOCKED_PREP_REQUIRED") {
+        return inspection;
+    }
 
     if (isHygieneRecordProfile()) {
-        // Isolate the task copy before mapping. This keeps Photoshop from
-        // converting and saving unrelated layouts in a multi-layout PSD.
-        var removedLayouts = removeInactiveHygieneLayouts(document, layerIndex || buildLayerIndex(document));
-        if (inspection.status === "NEEDS_PREP") {
-            prepareHygieneTemplate(document, buildLayerIndex(document));
-        }
+        prepareHygieneTemplate(document, layerIndex || buildLayerIndex(document));
         var hygieneIssues = hygieneProblems(document, buildLayerIndex(document));
         if (hygieneIssues.length > 0) {
             throw new Error("卫品模板自动映射后仍不完整：" + hygieneIssues.join("；"));
         }
-        var actionMessage = inspection.status === "NEEDS_PREP" ? "建立图层映射" : "保留已通过体检的字段映射";
-        return {
-            status: "PREPARED",
-            message: "已为卫品天猫官旗 750 模板" + actionMessage + "，并从任务副本移除 " + removedLayouts.length + " 个未使用版式。"
-        };
+        return { status: "PREPARED", message: "已为卫品天猫官旗 750 单版式模板建立字段映射副本。" };
     }
 
     var all = [];
@@ -851,7 +838,7 @@ function writePreparationReport(document, outputFile, message) {
     ];
     if (isHygieneRecordProfile()) {
         lines.push("本次映射版式：" + hygieneLayoutGroupNames().join("、"));
-        lines.push("说明：仅处理本次任务版式的字段图层；未使用版式已从任务副本移除，原始 PSD 未修改。");
+        lines.push("说明：仅处理本次任务版式的字段图层；多版式原始稿须先由业务方生成标准副本，原始 PSD 未修改。");
     }
     report.encoding = "UTF8";
     if (report.open("w")) {
@@ -874,6 +861,9 @@ function main() {
     }
 
     var result = prepareTemplate(document, inspection, layerIndex);
+    if (result.status !== "PREPARED") {
+        return result.status + "|" + result.message + "|" + document.fullName.fsName;
+    }
     var outputFile = uniquePreparedFile(File(document.fullName));
     var saveOptions = new PhotoshopSaveOptions();
     saveOptions.layers = true;

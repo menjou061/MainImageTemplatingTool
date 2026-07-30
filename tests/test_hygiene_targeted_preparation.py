@@ -26,6 +26,14 @@ class HygieneTargetedPreparationTest(unittest.TestCase):
         self.assertIn('Get-ElapsedText -StartedAt $startedAt -Label ("PSD 模板 " + $Mode)', source)
         self.assertIn("本次映射版式：", source)
 
+    def test_hygiene_prefers_business_provided_prepared_sibling(self) -> None:
+        source = RUNNER.read_text(encoding="utf-8-sig")
+
+        self.assertIn("function Get-PreparedTemplateSibling", source)
+        self.assertIn("_套版模板.psd", source)
+        self.assertIn("标准模板副本体检通过", source)
+        self.assertIn("E_TEMPLATE_PREP_REQUIRED", source)
+
     def test_batch_preflight_uses_active_layout_scope(self) -> None:
         source = BATCH.read_text(encoding="utf-8")
 
