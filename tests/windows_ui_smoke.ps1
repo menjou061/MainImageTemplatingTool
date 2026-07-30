@@ -6,6 +6,7 @@
     [Parameter(Mandatory = $true)][string]$ArtifactDir,
     [string]$Category = '',
     [string]$Channel = '',
+    [string]$SheetName = '',
     [int]$ExpectedJpgWidth = 800,
     [int]$ExpectedJpgHeight = 800,
     [switch]$UseSingleProduct,
@@ -306,6 +307,15 @@ try {
 
     $mainWindow = Wait-DesktopWindow -Title '电商主图套版工具 1.2'
     Show-AutomationWindow -Window $mainWindow
+    if (-not [string]::IsNullOrWhiteSpace($SheetName)) {
+        $sheetCombo = Get-Control -Root $mainWindow -Name '3  数据工作表' -ControlType ([System.Windows.Automation.ControlType]::ComboBox)
+        if (-not $sheetCombo) { throw '未找到数据工作表下拉框。' }
+        Select-ComboItem -Combo $sheetCombo -Name $SheetName
+        Start-Sleep -Seconds 3
+        $mainWindow = Wait-DesktopWindow -Title '电商主图套版工具 1.2'
+        Show-AutomationWindow -Window $mainWindow
+        Write-SmokeLog "已显式选择 Sheet：$SheetName"
+    }
     Write-ControlSnapshot -Window $mainWindow -Label '表格已加载'
     Capture-Desktop -Name '02-表格已加载.png'
 
