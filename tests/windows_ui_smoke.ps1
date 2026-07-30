@@ -257,9 +257,21 @@ try {
     $productListControl = Get-Control -Root $mainWindow -Name '4  商品范围' -ControlType ([System.Windows.Automation.ControlType]::List)
     if (-not $productListControl) { throw '商品列表为空。' }
     Show-AutomationWindow -Window $mainWindow
-    $productListControl.SetFocus()
-    [System.Windows.Forms.SendKeys]::SendWait('{HOME}')
-    [System.Windows.Forms.SendKeys]::SendWait(' ')
+    $productItems = @($productListControl.FindAll(
+        [System.Windows.Automation.TreeScope]::Children,
+        (New-Object System.Windows.Automation.PropertyCondition(
+            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+            [System.Windows.Automation.ControlType]::ListItem
+        ))
+    ))
+    if ($productItems.Count -lt 1) { throw '商品列表没有可选商品。' }
+    try {
+        $productItems[0].GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+    } catch {
+        $productListControl.SetFocus()
+        [System.Windows.Forms.SendKeys]::SendWait('{HOME}')
+        [System.Windows.Forms.SendKeys]::SendWait(' ')
+    }
     Start-Sleep -Seconds 1
     Capture-Desktop -Name '03-商品已勾选.png'
 
