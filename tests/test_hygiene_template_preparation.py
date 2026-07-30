@@ -63,16 +63,13 @@ class HygieneTemplatePreparationTest(unittest.TestCase):
         source = SCRIPT.read_text(encoding="utf-8")
 
         self.assertIn("function inactiveHygieneLayouts(document, layerIndex)", source)
-        self.assertIn("function removeInactiveHygieneLayouts(document, layerIndex)", source)
-        self.assertIn("inactive[index].layer.remove()", source)
-        self.assertIn('status: "NEEDS_ISOLATION"', source)
-        removal = source.index("var removedLayouts = removeInactiveHygieneLayouts(document")
-        mapping = source.index("prepareHygieneTemplate(document, buildLayerIndex(document))")
+        self.assertIn('status: "BLOCKED_PREP_REQUIRED"', source)
+        self.assertIn("E_TEMPLATE_PREP_REQUIRED", source)
+        self.assertNotIn("function removeInactiveHygieneLayouts", source)
+        self.assertIn("多版式原始稿须先由业务方生成标准副本", source)
+        blocked_return = source.index("if (result.status !== \"PREPARED\")")
         save = source.index("document.saveAs(outputFile")
-        self.assertLess(removal, mapping)
-        self.assertLess(removal, save)
-        self.assertIn("未使用版式已从任务副本移除，原始 PSD 未修改", source)
-        self.assertIn('inspection.status === "NEEDS_PREP" ? "建立图层映射" : "保留已通过体检的字段映射"', source)
+        self.assertLess(blocked_return, save)
 
 
 if __name__ == "__main__":

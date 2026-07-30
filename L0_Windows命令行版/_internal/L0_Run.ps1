@@ -1791,6 +1791,17 @@ function Invoke-TemplatePreparationCheck {
     }
 }
 
+function Get-PreparedTemplateSibling {
+    param([string]$TemplatePath)
+    $directory = Split-Path -Parent $TemplatePath
+    $baseName = [System.IO.Path]::GetFileNameWithoutExtension($TemplatePath)
+    $candidate = Join-Path $directory ($baseName + '_套版模板.psd')
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+        return $candidate
+    }
+    return $null
+}
+
 function Resolve-TemplateForTask {
     param(
         [object]$Application,
@@ -1802,6 +1813,16 @@ function Resolve-TemplateForTask {
     # separate check invocation.
     if ($selectedProfile -and $selectedProfile.layout -eq 'record_rows') {
         Set-RunProgress -Stage 'PSD 模板体检与映射' -Detail '仅检查并映射本次商品实际使用的版式图层；未使用版式不会改造。'
+        $preparedSibling = Get-PreparedTemplateSibling -TemplatePath $TemplatePath
+        if ($preparedSibling) {
+            Add-Log "检测到业务方提供的标准模板副本，先体检副本：$preparedSibling"
+            $siblingCheck = Invoke-TemplatePreparationCheck -Application $Application -TemplatePath $preparedSibling -Mode 'check'
+            if ($siblingCheck.Status -eq 'READY') {
+                Add-Log "标准模板副本体检通过，本次任务直接使用副本：$preparedSibling"
+                return $preparedSibling
+            }
+            throw "E_TEMPLATE_PREP_REQUIRED：标准模板副本未通过体检：$($siblingCheck.Message)"
+        }
         $targeted = Invoke-TemplatePreparationCheck -Application $Application -TemplatePath $TemplatePath -Mode 'prepare'
         if ($targeted.Status -eq 'READY') {
             Add-Log 'PSD 模板已通过本次版式体检，直接使用原模板。'
