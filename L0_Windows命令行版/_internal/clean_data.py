@@ -420,7 +420,9 @@ def price_text(value: Any, *, currency: bool = False) -> str:
     return ("¥" + text) if currency and text else text
 
 
-def row_from_standard_record(values: dict[str, str], variant: str) -> dict[str, str]:
+def row_from_standard_record(
+    values: dict[str, str], variant: str, output_label: str | None = None
+) -> dict[str, str]:
     gift_paths = split_lines(values.get("赠品素材路径", ""))
     gift_copy = split_lines(values.get("赠品文案", ""))
     record: dict[str, str] = {
@@ -448,12 +450,37 @@ def row_from_standard_record(values: dict[str, str], variant: str) -> dict[str, 
     record["代言IP"] = record["代言IP路径"]
     record["价格优惠券开关"] = "是" if record["价格优惠券"] else "否"
     record["价格立减开关"] = "是" if record["价格立减"] else "否"
-    if values.get("输出规格", "") and values["输出规格"] not in variant:
-        record["_跳过"] = "规格不匹配"
+    expected_spec = as_text(output_label) or as_text(variant)
+    actual_spec = as_text(values.get("输出规格", ""))
+    if not actual_spec:
+        record["预检异常"] = append_issue(
+            record["预检异常"],
+            f"E_OUTPUT_SPEC_MISSING:输出规格为空，应填写{expected_spec or '当前规格'}",
+        )
+    elif actual_spec != expected_spec:
+        record["预检异常"] = append_issue(
+            record["预检异常"],
+            f"E_OUTPUT_SPEC_MISMATCH:输出规格“{actual_spec}”与当前规格“{expected_spec}”不一致",
+        )
     if values.get("是否出图", "") != "是":
         record["_跳过"] = "未选择出图"
+    check_status = as_text(values.get("检查状态", ""))
+    if check_status != "可出图":
+        record["预检异常"] = append_issue(
+            record["预检异常"],
+            f"E_CHECK_STATUS_INVALID:检查状态“{check_status or '空'}”不是“可出图”",
+        )
+    gift_layout = as_text(values.get("赠品版式", ""))
+    if gift_layout:
+        record["预检异常"] = append_issue(
+            record["预检异常"],
+            f"E_GIFT_LAYOUT_UNSUPPORTED:暂不支持自动处理赠品版式“{gift_layout}”，请留空",
+        )
     if len(gift_paths) != len(gift_copy) or len(gift_paths) > 3:
-        record["预检异常"] = "E_GIFT_PAIR_MISMATCH:赠品素材与文案数量不一致或超过3项"
+        record["预检异常"] = append_issue(
+            record["预检异常"],
+            "E_GIFT_PAIR_MISMATCH:赠品素材与文案数量不一致或超过3项",
+        )
     for index in range(3):
         record[f"赠品图{index + 1}"] = normalize_image_reference(gift_paths[index]) if index < len(gift_paths) else ""
         record[f"赠品文案{index + 1}"] = gift_copy[index] if index < len(gift_copy) else ""
@@ -604,7 +631,11 @@ def build_record_rows(
             continue
         if schema == "standard":
             values = {headers[index]: as_text(ws.cell(row_number, index + 1).value) for index in range(len(headers))}
-            record = row_from_standard_record(values, str(profile["variant"]))
+            record = row_from_standard_record(
+                values,
+                str(profile["variant"]),
+                str(profile.get("output_label", "")),
+            )
             if record.pop("_跳过", ""):
                 continue
             expected_channel = as_text(profile.get("channel", ""))
