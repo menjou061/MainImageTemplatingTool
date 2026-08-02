@@ -63,6 +63,15 @@ class ChannelProfileTest(unittest.TestCase):
         profile = get_profile("legacy-v1", require_enabled=False)
         self.assertEqual(get_variant_for_sheet(profile, "任意可见 Sheet"), "main-800")
 
+    def test_legacy_profile_allows_empty_coupon_layers(self) -> None:
+        profile = get_profile("legacy-v1", require_enabled=False)
+        self.assertEqual(
+            profile["optional_psd_variables"],
+            ["券名", "折扣", "券门槛"],
+        )
+        self.assertTrue(profile["data_fields_optional"])
+        self.assertEqual(profile["mapping"]["官宣新旧包装底"], "新旧包装底图")
+
     def test_hengan_lifestyle_maps_real_sheets_and_sizes(self) -> None:
         profile = get_profile("hengan-lifestyle-v1", require_enabled=False)
         headers = [
@@ -91,6 +100,7 @@ class ChannelProfileTest(unittest.TestCase):
 
     def test_hygiene_tmall_profile_uses_the_record_row_contract(self) -> None:
         profile = get_profile("hygiene-tmall-v1.2")
+        self.assertTrue(profile["data_fields_optional"])
         self.assertEqual(profile["layout"], "record_rows")
         self.assertEqual(profile["target_size"], {"width": 750, "height": 1000})
         self.assertEqual(profile["output_label"], "750")

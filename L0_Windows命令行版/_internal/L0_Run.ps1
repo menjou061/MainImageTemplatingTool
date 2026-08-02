@@ -513,6 +513,10 @@ function Save-UserSettings {
         productName = $ProductName
         updatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
     }
+    $timeoutSetting = Get-SettingText -Settings $script:Settings -Name 'photoshopTimeoutSeconds'
+    if (-not [string]::IsNullOrWhiteSpace($timeoutSetting)) {
+        $payload | Add-Member -NotePropertyName 'photoshopTimeoutSeconds' -NotePropertyValue $timeoutSetting
+    }
     try {
         $json = $payload | ConvertTo-Json -Depth 4
         Write-Utf8Bom -Path $settingsPath -Content ($json + [Environment]::NewLine)
@@ -1864,12 +1868,20 @@ function Invoke-PhotoshopJavaScript {
     if ($progIds.Count -eq 0) {
         throw 'E_PHOTOSHOP_UNAVAILABLE：未找到 Photoshop COM ProgID。'
     }
+    # PowerShell serializes the generic ProgID list as one nested object when
+    # passed directly to a background job. Use a scalar payload and rebuild the
+    # list inside the child process so each COM ProgID stays distinct.
+    $progIdPayload = (($progIds | ForEach-Object { [string]$_ }) -join "`n")
     $job = $null
     try {
         $job = Start-Job -ScriptBlock {
-            param($candidateProgIds, $jsx)
+            param([string]$candidateProgIdPayload, [string]$jsx)
             $lastError = ''
-            foreach ($candidateProgId in @($candidateProgIds)) {
+            $candidateProgIds = @(
+                ($candidateProgIdPayload -split "`n") |
+                    Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+            )
+            foreach ($candidateProgId in $candidateProgIds) {
                 try {
                     $app = New-Object -ComObject $candidateProgId -ErrorAction Stop
                     try {
@@ -1882,7 +1894,7 @@ function Invoke-PhotoshopJavaScript {
                 }
             }
             throw "DoJavaScript 调用失败：$lastError"
-        } -ArgumentList (,$progIds), $ScriptText -ErrorAction Stop
+        } -ArgumentList $progIdPayload, $ScriptText -ErrorAction Stop
         $deadline = (Get-Date).AddSeconds($timeout)
         while ($job.State -eq 'Running' -and (Get-Date) -lt $deadline) {
             Wait-Job -Job $job -Timeout 1 | Out-Null
@@ -1931,7 +1943,8 @@ function Invoke-TemplatePreparationCheck {
     param(
         [object]$Application,
         [string]$TemplatePath,
-        [string]$Mode
+        [string]$Mode,
+        [string[]]$DataFieldsWithValues = @()
     )
     if (-not (Test-Path -LiteralPath $templatePrepareScript -PathType Leaf)) {
         throw "缺少 PSD 模板检测脚本：$templatePrepareScript"
@@ -1940,7 +1953,9 @@ function Invoke-TemplatePreparationCheck {
     $script:OpenedDocument = $Application.Open($TemplatePath)
     try {
         $templateText = [System.IO.File]::ReadAllText($templatePrepareScript, [System.Text.Encoding]::UTF8)
-        $prefix = "`$.global.__TEMPLATE_PREP_INPUTS__ = { mode: '" + $Mode + "', profile: " + $profileJson + " };"
+        $dataFieldLiterals = @($DataFieldsWithValues | ForEach-Object { ConvertTo-JsStringLiteral ([string]$_) })
+        $dataFieldsJs = '[' + ($dataFieldLiterals -join ',') + ']'
+        $prefix = "`$.global.__TEMPLATE_PREP_INPUTS__ = { mode: '" + $Mode + "', profile: " + $profileJson + ", data_fields_with_values: " + $dataFieldsJs + " };"
         $scriptText = $prefix + "`r`n" + $templateText
         $rawResult = Invoke-PhotoshopJavaScript -Application $Application -ScriptText $scriptText
         $result = ConvertFrom-TemplatePreparationResult -RawResult $rawResult
@@ -2031,6 +2046,50 @@ function Resolve-TemplateForTask {
     }
     Add-Log "PSD 模板已自动改造为副本：$($prepared.TemplatePath)"
     return $prepared.TemplatePath
+}
+
+function Get-DataFieldsWithValues {
+    param(
+        [object[]]$Rows,
+        [object]$ProfileConfig
+    )
+    $fields = New-Object System.Collections.Generic.List[string]
+    foreach ($field in @($ProfileConfig.optional_psd_variables)) {
+        if ([string]::IsNullOrWhiteSpace([string]$field)) {
+            continue
+        }
+        foreach ($row in $Rows) {
+            $property = $row.PSObject.Properties[[string]$field]
+            if ($property -and -not [string]::IsNullOrWhiteSpace([string]$property.Value)) {
+                $fields.Add([string]$field)
+                break
+            }
+        }
+    }
+    return @($fields)
+}
+
+function Assert-TemplateDataBindings {
+    param(
+        [object]$Application,
+        [string]$TemplatePath,
+        [object[]]$Rows,
+        [object]$ProfileConfig
+    )
+    $dataFields = @(Get-DataFieldsWithValues -Rows $Rows -ProfileConfig $ProfileConfig)
+    if ($dataFields.Count -eq 0) {
+        Add-Log '模板字段一致性预检：表格没有填写可选 PSD 字段，跳过可选字段绑定检查。'
+        return
+    }
+    Add-Log "模板字段一致性预检：检查表格已填写的可选字段：$($dataFields -join '、')。"
+    $check = Invoke-TemplatePreparationCheck -Application $Application -TemplatePath $TemplatePath -Mode 'data_check' -DataFieldsWithValues $dataFields
+    if ($check.Status -eq 'DATA_BINDING_ERROR') {
+        throw "E_DATA_VAR_UNBOUND：当前 PSD 模板没有表格中填写的字段图层：$($dataFields -join '、')。请换用带对应区域的 PSD，或清空这些字段后重试。"
+    }
+    if ($check.Status -ne 'DATA_BINDING_READY') {
+        throw "E_DATA_VAR_UNBOUND：模板字段一致性预检未完成：$($check.Message)"
+    }
+    Add-Log '模板字段一致性预检通过：表格已填写字段均有对应 PSD 图层。'
 }
 
 function Get-ElapsedText {
@@ -2466,6 +2525,8 @@ try {
         $script:CurrentPsdPath = $psdPath
         Add-Log "本次任务将使用自动生成的模板副本：$psdPath"
     }
+    Set-RunProgress -Stage '模板字段一致性预检' -Detail '正在确认表格已填写字段均有对应 PSD 图层；不通过时不会开始批量生成。'
+    Assert-TemplateDataBindings -Application $photoshop -TemplatePath $psdPath -Rows $dataRows -ProfileConfig $selectedProfile
     $taskInfo = @(
         '电商主图套版任务信息',
         '',
@@ -2573,11 +2634,19 @@ try {
     }
     Write-EntryFailureReport -ErrorSummary $message -Suggestion '错误已经写入工具任务记录；需要排查时，请提供任务文件夹中的任务记录，或用户目录下的工具任务记录。'
     Write-TaskHistory -Status '失败' -Message $message
-    if (-not $NoUi -and $_.Exception.Message -match 'E_(PROFILE_[A-Z_]+|CONFIG_MISMATCH|VAR_[A-Z_]+|SIZE_MISMATCH)') {
-        $errorCode = $Matches[0]
+    if (-not $NoUi -and $_.Exception.Message -notmatch '^已取消') {
+        $friendlyMessage = [string]$_.Exception.Message
+        if ($friendlyMessage -match '^E_DATA_VAR_UNBOUND：(.+)$') {
+            $friendlyMessage = $Matches[1]
+        }
+        $errorCode = if ($_.Exception.Message -match 'E_(PROFILE_[A-Z_]+|CONFIG_MISMATCH|VAR_[A-Z_]+|SIZE_MISMATCH)') {
+            $Matches[0]
+        } else {
+            'TASK_FAILED'
+        }
         [void][System.Windows.Forms.MessageBox]::Show(
-            "本次任务未开始：表格、渠道或模板配置未通过检查。`r`n错误码：$errorCode`r`n详情已写入工具任务记录。",
-            '任务未开始',
+            "本次任务未开始。`r`n$friendlyMessage`r`n`r`n请按提示修改后重试。`r`n详情已写入工具任务记录。",
+            '套版失败',
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Warning
         )

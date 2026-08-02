@@ -34,6 +34,7 @@ NAME_MAP = {
     "大尺寸": "大尺寸图",
     "DT17090-24旧": "旧包装图",
     "正式618新旧包装底": "新旧包装底图",
+    "官宣新旧包装底": "新旧包装底图",
 }
 REQUIRED_IMAGE_FIELDS = {"商品图"}
 REQUIRED_RECORD_FIELDS = {"活动时间", "到手", "卖点", "规格"}
@@ -307,7 +308,13 @@ def source_variables(ws, layout: str = "horizontal", profile: dict[str, Any] | N
     return variables
 
 
-def row_from_column(ws, column: int, variables: list[tuple[int, str]], ws_values=None) -> dict[str, str]:
+def row_from_column(
+    ws,
+    column: int,
+    variables: list[tuple[int, str]],
+    ws_values=None,
+    data_fields_optional: bool = False,
+) -> dict[str, str]:
     row: dict[str, str] = {}
     for source_row, target_name in variables:
         value = ws.cell(source_row, column).value
@@ -332,7 +339,8 @@ def row_from_column(ws, column: int, variables: list[tuple[int, str]], ws_values
     else:
         row["优惠券开关"] = "是"
         if not all(filled):
-            row["预检异常"] = append_issue(row.get("预检异常", ""), "字段为空")
+            issue_key = "预检提醒" if data_fields_optional else "预检异常"
+            row[issue_key] = append_issue(row.get(issue_key, ""), "字段为空")
 
     return row
 
@@ -525,35 +533,55 @@ def quality_score(record: dict[str, str]) -> int:
     return sum(1 for key, value in record.items() if key not in {"预检异常", "优惠券开关"} and not is_blank(value))
 
 
-def add_material_precheck(record: dict[str, str], image_fields: set[str] | None = None) -> None:
+def add_material_precheck(
+    record: dict[str, str],
+    image_fields: set[str] | None = None,
+    *,
+    warning: bool = False,
+) -> None:
     """Validate each Excel-provided image address without scanning a folder."""
-    for field in image_fields or REQUIRED_IMAGE_FIELDS:
+    fields = REQUIRED_IMAGE_FIELDS if image_fields is None else image_fields
+    issue_key = "预检提醒" if warning else "预检异常"
+    for field in fields:
         image_path = as_text(record.get(field, ""))
         if is_disabled_image(image_path):
             if field == "商品图":
-                record["预检异常"] = append_issue(record.get("预检异常", ""), "素材地址缺失:商品图")
+                record[issue_key] = append_issue(record.get(issue_key, ""), "素材地址缺失:商品图")
             continue
         if not is_absolute_material_path(image_path):
-            record["预检异常"] = append_issue(record.get("预检异常", ""), f"素材地址缺失:{field}")
+            record[issue_key] = append_issue(record.get(issue_key, ""), f"素材地址缺失:{field}")
             continue
         if not material_exists(image_path):
-            record["预检异常"] = append_issue(record.get("预检异常", ""), f"缺图:{field}")
+            record[issue_key] = append_issue(record.get(issue_key, ""), f"缺图:{field}")
 
 
-def add_required_field_precheck(record: dict[str, str], required_fields: set[str] | None = None) -> None:
+def add_required_field_precheck(
+    record: dict[str, str],
+    required_fields: set[str] | None = None,
+    *,
+    warning: bool = False,
+) -> None:
     required = required_fields if required_fields is not None else REQUIRED_RECORD_FIELDS
     missing = [field for field in required if is_blank(record.get(field, ""))]
     if missing:
-        record["预检异常"] = append_issue(record.get("预检异常", ""), "字段为空:" + "、".join(sorted(missing)))
+        issue_key = "预检提醒" if warning else "预检异常"
+        record[issue_key] = append_issue(record.get(issue_key, ""), "字段为空:" + "、".join(sorted(missing)))
 
 
-def add_filename_precheck(record: dict[str, str], image_fields: set[str] | None = None) -> None:
-    for field in image_fields or REQUIRED_IMAGE_FIELDS:
+def add_filename_precheck(
+    record: dict[str, str],
+    image_fields: set[str] | None = None,
+    *,
+    warning: bool = False,
+) -> None:
+    fields = REQUIRED_IMAGE_FIELDS if image_fields is None else image_fields
+    issue_key = "预检提醒" if warning else "预检异常"
+    for field in fields:
         image_name = image_basename(record.get(field, ""))
         if is_disabled_image(image_name):
             continue
         if "m²" in image_name or "²" in image_name:
-            record["预检异常"] = append_issue(record.get("预检异常", ""), f"文件名特殊字符:{field}")
+            record[issue_key] = append_issue(record.get(issue_key, ""), f"文件名特殊字符:{field}")
 
 
 def exception_record(record: dict[str, str], product: str, column: int, issue: str, detail: str) -> dict[str, str]:
@@ -618,9 +646,16 @@ def build_record_rows(
     missing = sorted(required_headers - header_set)
     if missing:
         raise ProfileError("E_PROFILE_SCHEMA_MISMATCH", "缺少列：" + "、".join(missing))
-    required_fields = set(profile.get("record_required_fields", [
+    configured_required_fields = set(profile.get("record_required_fields", [
         "活动时间", "卖点", "片数套", "片数数量", "到手", "价格活动价",
     ]))
+    configured_image_fields = {
+        variable["name"]
+        for variable in profile.get("required_psd_variables", [])
+        if variable.get("type") == "smart_object"
+    } or {"商品图"}
+    data_fields_optional = bool(profile.get("data_fields_optional", False))
+    required_fields = set() if data_fields_optional else configured_required_fields
     records: list[dict[str, str]] = []
     record_source_rows: list[int] = []
     seen_products: dict[str, int] = {}
@@ -669,17 +704,22 @@ def build_record_rows(
             )
         else:
             seen_products[product] = row_number
-        if is_blank(record.get("商品图")):
-            record["预检异常"] = append_issue(record.get("预检异常", ""), "素材地址缺失:商品图")
-        elif not material_exists(record["商品图"]):
-            record["预检异常"] = append_issue(record.get("预检异常", ""), "缺图:商品图")
-        for index in range(1, 4):
-            gift_path = record.get(f"赠品图{index}", "")
-            if gift_path and not material_exists(gift_path):
-                record["预检异常"] = append_issue(record.get("预检异常", ""), f"缺图:赠品图{index}")
-        missing_fields = [field for field in sorted(required_fields) if is_blank(record.get(field, ""))]
-        if missing_fields:
-            record["预检异常"] = append_issue(record.get("预检异常", ""), "字段为空:" + "、".join(missing_fields))
+        if data_fields_optional:
+            add_filename_precheck(record, configured_image_fields, warning=True)
+            add_material_precheck(record, configured_image_fields, warning=True)
+            add_required_field_precheck(record, configured_required_fields, warning=True)
+        else:
+            if is_blank(record.get("商品图")):
+                record["预检异常"] = append_issue(record.get("预检异常", ""), "素材地址缺失:商品图")
+            elif not material_exists(record["商品图"]):
+                record["预检异常"] = append_issue(record.get("预检异常", ""), "缺图:商品图")
+            for index in range(1, 4):
+                gift_path = record.get(f"赠品图{index}", "")
+                if gift_path and not material_exists(gift_path):
+                    record["预检异常"] = append_issue(record.get("预检异常", ""), f"缺图:赠品图{index}")
+            missing_fields = [field for field in sorted(required_fields) if is_blank(record.get(field, ""))]
+            if missing_fields:
+                record["预检异常"] = append_issue(record.get("预检异常", ""), "字段为空:" + "、".join(missing_fields))
         if record.get("备注") and not record["备注"].startswith("*"):
             record["预检提醒"] = "备注建议以*开头"
         records.append(record)
@@ -746,31 +786,34 @@ def build_data(
     if layout != profile["layout"]:
         raise ProfileError("E_PROFILE_SCHEMA_MISMATCH", f"profile {profile['profile_id']} 不支持此 Sheet 布局")
     variables = source_variables(ws, layout, profile)
+    data_fields_optional = bool(profile.get("data_fields_optional", False))
     if profile.get("execution_mode") == "photoshop_variables":
-        required_fields = {
+        configured_required_fields = {
             variable["name"]
             for variable in profile.get("required_psd_variables", [])
             if variable.get("type") == "text"
         }
-        required_image_fields = {
+        configured_image_fields = {
             variable["name"]
             for variable in profile.get("required_psd_variables", [])
             if variable.get("type") == "pixel_replacement"
         }
     else:
         if layout == "horizontal":
-            required_fields = REQUIRED_RECORD_FIELDS
+            configured_required_fields = REQUIRED_RECORD_FIELDS
         else:
-            required_fields = {
+            configured_required_fields = {
                 variable["name"]
                 for variable in profile.get("required_psd_variables", [])
                 if variable.get("type") == "text"
             } or {"预估到手价", "卖点", "规格"}
-        required_image_fields = {
+        configured_image_fields = {
             variable["name"]
             for variable in profile.get("required_psd_variables", [])
             if variable.get("type") == "smart_object"
         } or REQUIRED_IMAGE_FIELDS
+    required_fields = set() if data_fields_optional else configured_required_fields
+    required_image_fields = set() if data_fields_optional else configured_image_fields
     # Keep every selected product candidate, including records with preflight
     # issues.  The UI can later let the designer choose either the clean set or
     # the original-content set without reconstructing rows from an exception
@@ -799,7 +842,7 @@ def build_data(
         if layout == "vertical":
             record = row_from_vertical(ws, ws_values, source_index, variables)
         else:
-            record = row_from_column(ws, source_index, variables, ws_values)
+            record = row_from_column(ws, source_index, variables, ws_values, data_fields_optional)
         record["商品文件名"] = product
         record["profile_id"] = profile["profile_id"]
         record["profile_version"] = profile["profile_version"]
@@ -807,12 +850,17 @@ def build_data(
         if has_newline(raw_product):
             record["预检异常"] = append_issue(record.get("预检异常", ""), "脏数据")
             exceptions.append(exception_record(record, product, source_index, "脏数据", "商品文件名包含换行符"))
-        add_filename_precheck(record, required_image_fields)
-        add_material_precheck(record, required_image_fields)
-        add_required_field_precheck(record, required_fields)
+        if data_fields_optional:
+            add_filename_precheck(record, configured_image_fields, warning=True)
+            add_material_precheck(record, configured_image_fields, warning=True)
+            add_required_field_precheck(record, configured_required_fields, warning=True)
+        else:
+            add_filename_precheck(record, required_image_fields)
+            add_material_precheck(record, required_image_fields)
+            add_required_field_precheck(record, required_fields)
         if "脏数据" in record.get("预检异常", "") and not has_newline(raw_product):
             exceptions.append(exception_record(record, product, source_index, "脏数据", "任一单元格包含换行符"))
-        price_error = price_format_error(record)
+        price_error = "" if data_fields_optional else price_format_error(record)
         if price_error:
             record["预检异常"] = append_issue(record.get("预检异常", ""), "价格格式异常")
             exceptions.append(exception_record(record, product, source_index, "价格格式异常", price_error))
