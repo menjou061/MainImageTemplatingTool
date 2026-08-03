@@ -34,8 +34,11 @@ class WindowsPhotoshopBridgeTest(unittest.TestCase):
     def test_template_identity_blocks_before_photoshop_starts(self) -> None:
         identity = self.source.index("模板身份校验")
         start = self.source.index("$photoshop = Start-Photoshop")
+        missing_identity_block = self.source.index("if ($identityMissing -and $profileId -ne 'legacy-v1')")
         self.assertLess(identity, start)
+        self.assertLess(missing_identity_block, start)
         self.assertIn("E_TEMPLATE_IDENTITY_MISMATCH", self.source)
+        self.assertIn("E_TEMPLATE_IDENTITY_MISSING", self.source)
         self.assertIn("template_identity.py", self.source)
 
 

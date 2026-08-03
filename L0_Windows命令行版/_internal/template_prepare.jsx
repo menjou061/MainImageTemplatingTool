@@ -1052,7 +1052,7 @@ function uniquePreparedFile(sourceFile) {
     var folder = sourceFile.parent;
     var candidate = File(folder.fsName + "/" + sourceName + "_套版模板.psd");
     var suffix = 1;
-    while (candidate.exists) {
+    while (candidate.exists || File(candidate.fsName + ".template.json").exists) {
         candidate = File(folder.fsName + "/" + sourceName + "_套版模板_" + suffix + ".psd");
         suffix++;
     }
@@ -1084,13 +1084,19 @@ function main() {
     var document = app.activeDocument;
     var inputs = $.global.__TEMPLATE_PREP_INPUTS__ || {};
     var mode = inputs.mode || "check";
+    var forceCopy = !!inputs.forceCopy;
     var layerIndex = buildLayerIndex(document);
     var inspection = inspectPreparation(document, layerIndex);
-    if (mode !== "prepare" || inspection.status === "READY" || inspection.status === "AMBIGUOUS") {
+    if (mode !== "prepare" || inspection.status === "AMBIGUOUS") {
         return inspection.status + "|" + inspection.message + "|" + document.fullName.fsName;
     }
 
-    var result = prepareTemplate(document, inspection, layerIndex);
+    if (inspection.status === "READY" && !forceCopy) {
+        return inspection.status + "|" + inspection.message + "|" + document.fullName.fsName;
+    }
+    var result = inspection.status === "READY"
+        ? { status: "PREPARED", message: "模板已通过体检；已生成本次独立副本用于建立模板身份。" }
+        : prepareTemplate(document, inspection, layerIndex);
     if (result.status !== "PREPARED") {
         return result.status + "|" + result.message + "|" + document.fullName.fsName;
     }

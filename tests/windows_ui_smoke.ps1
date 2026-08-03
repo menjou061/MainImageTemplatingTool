@@ -9,6 +9,7 @@
     [string]$SheetName = '',
     [int]$ExpectedJpgWidth = 800,
     [int]$ExpectedJpgHeight = 800,
+    [int]$ProductCount = 0,
     [switch]$UseSingleProduct,
     [switch]$RequireTextOverflow
 )
@@ -256,6 +257,12 @@ try {
     }
     $entry = Join-Path $ToolRoot '开始套版.cmd'
     if (-not (Test-Path -LiteralPath $entry -PathType Leaf)) {
+        # Windows tar can decode a Unicode archive member with the active
+        # console code page. The ASCII launcher is equivalent and keeps the
+        # smoke path independent of archive filename decoding.
+        $entry = Join-Path $ToolRoot 'L0_Start.cmd'
+    }
+    if (-not (Test-Path -LiteralPath $entry -PathType Leaf)) {
         throw "未找到用户启动入口：$entry"
     }
     $arguments = '/d /c call "{0}"' -f $entry
@@ -333,11 +340,19 @@ try {
         ))
     ))
     if ($productItems.Count -lt 1) { throw '商品列表没有可选商品。' }
-    Set-CheckedListItem -Item $productItems[0]
+    $selectionCount = if ($ProductCount -gt 0) { $ProductCount } else { 1 }
+    if ($selectionCount -gt $productItems.Count) {
+        throw "请求勾选 $selectionCount 个商品，但当前列表只有 $($productItems.Count) 个。"
+    }
+    for ($selectionIndex = 0; $selectionIndex -lt $selectionCount; $selectionIndex++) {
+        Set-CheckedListItem -Item $productItems[$selectionIndex]
+        Start-Sleep -Milliseconds 250
+    }
+    Write-SmokeLog "已勾选 $selectionCount 个商品。"
     Start-Sleep -Milliseconds 500
     Capture-Desktop -Name '03-商品已勾选.png'
 
-    if (-not $UseSingleProduct) {
+    if (-not $UseSingleProduct -and $ProductCount -le 0) {
         # The checked-item state is visually verified before switching back to
         # the full-sheet path used by the default regression.
         $allRadio = Get-Control -Root $mainWindow -Name '全部商品' -ControlType ([System.Windows.Automation.ControlType]::RadioButton)
@@ -413,6 +428,9 @@ try {
     if ($resultRows.Count -eq 0) { throw '生成结果.csv 没有商品结果。' }
     if ($UseSingleProduct -and $resultRows.Count -ne 1) {
         throw "单商品回归应产生 1 条结果，实际为 $($resultRows.Count) 条。"
+    }
+    if ($ProductCount -gt 0 -and $resultRows.Count -ne $ProductCount) {
+        throw "指定商品回归应产生 $ProductCount 条结果，实际为 $($resultRows.Count) 条。"
     }
 
     $blockingStatuses = @('处理失败', '模板错误', '数据需核对', '缺图', '字段为空')

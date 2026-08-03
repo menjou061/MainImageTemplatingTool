@@ -40,6 +40,54 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def write_template_identity(
+    psd_path: Path,
+    profile_id: str,
+    variant: str,
+    *,
+    source_psd_path: Path | None = None,
+) -> dict:
+    """Write a sidecar for a PSD that has already passed template preparation.
+
+    The sidecar is metadata next to the PSD; the PSD bytes are never changed.
+    Callers still run ``validate_template_identity`` afterwards so a failed
+    write or a changed file cannot be treated as approved.
+    """
+    if not psd_path.is_file():
+        raise TemplateIdentityError("E_TEMPLATE_IDENTITY_MISSING", f"PSD 不存在：{psd_path}")
+    if source_psd_path is None:
+        raise TemplateIdentityError(
+            "E_TEMPLATE_IDENTITY_INVALID",
+            "只能为本次自动生成的 PSD 副本写入身份文件；缺少原始 PSD 路径。",
+        )
+    if not source_psd_path.is_file():
+        raise TemplateIdentityError("E_TEMPLATE_IDENTITY_MISSING", f"原始 PSD 不存在：{source_psd_path}")
+    if psd_path.resolve() == source_psd_path.resolve():
+        raise TemplateIdentityError(
+            "E_TEMPLATE_IDENTITY_INVALID",
+            "原始 PSD 不能被自动签发身份文件；请先生成独立模板副本。",
+        )
+    sidecar = manifest_path(psd_path)
+    if sidecar.exists():
+        raise TemplateIdentityError(
+            "E_TEMPLATE_IDENTITY_INVALID",
+            "模板副本已有身份文件；不会覆盖或重签历史副本。",
+        )
+    profile = get_profile(profile_id, variant)
+    expected_template_id = str(profile.get("template_id") or "")
+    if not expected_template_id:
+        raise TemplateIdentityError("E_CONFIG_MISMATCH", f"{profile_id}/{variant} 未配置 template_id")
+    manifest = {
+        "template_id": expected_template_id,
+        "profile_id": profile_id,
+        "profile_version": str(profile["profile_version"]),
+        "variant": variant,
+        "psd_sha256": sha256_file(psd_path),
+    }
+    sidecar.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return {"template_id": expected_template_id, "manifest": str(sidecar)}
+
+
 def validate_template_identity(psd_path: Path, profile_id: str, variant: str) -> dict:
     if not psd_path.is_file():
         raise TemplateIdentityError("E_TEMPLATE_IDENTITY_MISSING", f"PSD 不存在：{psd_path}")
@@ -78,9 +126,19 @@ def main() -> int:
     parser.add_argument("--psd", required=True)
     parser.add_argument("--profile", required=True)
     parser.add_argument("--variant", required=True)
+    parser.add_argument("--write", action="store_true", help="为已准备好的 PSD 写入 SHA-256 sidecar")
+    parser.add_argument("--source-psd", help="自动生成副本对应的原始 PSD；--write 时必填")
     args = parser.parse_args()
     try:
-        result = validate_template_identity(Path(args.psd), args.profile, args.variant)
+        if args.write:
+            result = write_template_identity(
+                Path(args.psd),
+                args.profile,
+                args.variant,
+                source_psd_path=Path(args.source_psd) if args.source_psd else None,
+            )
+        else:
+            result = validate_template_identity(Path(args.psd), args.profile, args.variant)
     except (TemplateIdentityError, ProfileError) as error:
         print(str(error), file=sys.stderr)
         return 2
