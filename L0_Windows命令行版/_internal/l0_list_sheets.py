@@ -173,12 +173,81 @@ def list_products(
     return 0
 
 
+def resolve_variant_for_workbook(
+    workbook_path: Path,
+    sheet_name: str,
+    profile_id: str,
+) -> str:
+    """Resolve a shared record-row Sheet from its unique output spec."""
+    profile = get_profile(profile_id)
+    output_label_variants = {
+        variant_id: as_text(config.get("output_label"))
+        for variant_id, config in profile.get("variants", {}).items()
+        if as_text(config.get("output_label"))
+    }
+    if not output_label_variants:
+        return str(profile.get("default_variant") or "")
+
+    workbook = load_workbook(workbook_path, read_only=False, data_only=True)
+    if sheet_name not in workbook.sheetnames:
+        raise ProfileError("E_PROFILE_SHEET_MISMATCH", f"Sheet 不存在：{sheet_name}")
+    worksheet = workbook[sheet_name]
+    if worksheet.sheet_state != "visible" or worksheet.title == "WpsReserved_CellImgList":
+        raise ProfileError("E_PROFILE_SHEET_MISMATCH", f"Sheet 不可处理：{sheet_name}")
+    headers = first_row_headers(worksheet)
+    header_index = {name: index + 1 for index, name in enumerate(headers) if name}
+    if not HYGIENE_STANDARD_HEADERS.issubset(header_index):
+        return str(profile.get("default_variant") or "")
+
+    expected_channel = as_text(profile.get("channel"))
+    specs: set[str] = set()
+    max_row, _ = ensure_dimensions(worksheet)
+    for row in range(2, max_row + 1):
+        if worksheet.row_dimensions[row].hidden:
+            continue
+        if as_text(worksheet.cell(row, header_index["是否出图"]).value) != "是":
+            continue
+        if expected_channel and "渠道" in header_index:
+            if as_text(worksheet.cell(row, header_index["渠道"]).value) != expected_channel:
+                continue
+        spec = as_text(worksheet.cell(row, header_index["输出规格"]).value)
+        if spec:
+            specs.add(spec)
+
+    if len(specs) != 1:
+        detail = "为空" if not specs else "、".join(sorted(specs))
+        raise ProfileError(
+            "E_PROFILE_SHEET_MISMATCH",
+            f"Sheet {sheet_name!r} 未匹配到唯一输出规格（{detail}），禁止猜测模板规格。",
+        )
+    spec = next(iter(specs))
+    matches = [variant_id for variant_id, label in output_label_variants.items() if label == spec]
+    if len(matches) != 1:
+        raise ProfileError("E_PROFILE_SHEET_MISMATCH", f"输出规格 {spec!r} 未匹配到唯一模板规格。")
+    return matches[0]
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print("用法：l0_list_sheets.py <xlsx> 或 l0_list_sheets.py --products <xlsx> <sheet> [--profile ID --variant ID]", file=sys.stderr)
         return 2
 
+    resolve_mode = sys.argv[1] == "--resolve-variant"
     product_mode = sys.argv[1] == "--products"
+    if resolve_mode:
+        if len(sys.argv) != 6 or sys.argv[4] != "--profile":
+            print("用法：l0_list_sheets.py --resolve-variant <xlsx> <sheet> --profile <ID>", file=sys.stderr)
+            return 2
+        workbook_path = Path(sys.argv[2])
+        if not workbook_path.is_file():
+            print(f"Excel 文件不存在：{workbook_path}", file=sys.stderr)
+            return 2
+        try:
+            print(resolve_variant_for_workbook(workbook_path, sys.argv[3], sys.argv[5]))
+            return 0
+        except ProfileError as error:
+            print(str(error), file=sys.stderr)
+            return 2
     if product_mode and len(sys.argv) not in {4, 6, 8}:
         print("用法：l0_list_sheets.py --products <xlsx> <sheet> [--profile ID --variant ID]", file=sys.stderr)
         return 2

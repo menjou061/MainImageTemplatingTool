@@ -99,14 +99,19 @@ class ChannelProfileTest(unittest.TestCase):
         self.assertIn("输出文件名", profile["sheet"]["required_headers"])
         self.assertTrue(any("备注" in headers for headers in profile["sheet"]["required_header_sets"]))
         self.assertNotIn("价格优惠券", profile["record_required_fields"])
-        self.assertIn("小马无侧边", profile["record_layout"]["groups"])
+        self.assertEqual(profile["record_layout"]["groups"], ["无代言人"])
+        self.assertEqual(profile["record_layout"]["gift_slots"], 2)
+        self.assertEqual(profile["record_layout"]["gift_layout"], "top_and_bottom_cards")
         self.assertEqual(profile["variant_selection"], "sheet")
         self.assertNotIn("batch_variants", profile)
         self.assertEqual(get_variant_for_sheet(profile, "出图数据"), "main-750")
         self.assertEqual(get_variant_for_sheet(profile, "跑批数据"), "main-750")
         self.assertNotIn("sheet_name", profile["variants"]["main-750"])
-        self.assertNotIn("main-800", profile["variants"])
-        self.assertEqual(profile["pending_variants"]["main-800"]["status"], "pending_asset_approval")
+        hygiene800 = get_profile("hygiene-tmall-v1.2", "main-800")
+        self.assertEqual(hygiene800["target_size"], {"width": 750, "height": 750})
+        self.assertEqual(hygiene800["output_label"], "800")
+        self.assertEqual(hygiene800["record_layout"]["gift_layout"], "two_top_cards")
+        self.assertEqual(hygiene800["record_layout"]["gift_switches"], ["赠品槽位1", "赠品槽位2"])
 
     def test_enabled_category_channel_combinations_are_complete_and_unique(self) -> None:
         enabled = [profile for profile in load_profiles().values() if profile["status"] == "enabled"]
@@ -118,6 +123,28 @@ class ChannelProfileTest(unittest.TestCase):
         self.assertIn(("纸品", "天猫官旗"), combinations)
         self.assertIn(("纸品", "恒安生活馆"), combinations)
         self.assertIn(("卫品", "天猫官旗"), combinations)
+
+    def test_every_supported_variant_has_a_unique_template_identity(self) -> None:
+        expected = {
+            ("纸品", "京东自营", "main-800"),
+            ("纸品", "天猫官旗", "main-750"),
+            ("纸品", "天猫官旗", "main-800"),
+            ("纸品", "恒安生活馆", "main-750"),
+            ("纸品", "恒安生活馆", "main-800"),
+            ("卫品", "天猫官旗", "main-750"),
+            ("卫品", "天猫官旗", "main-800"),
+        }
+        actual = set()
+        template_ids = []
+        for profile in load_profiles().values():
+            if profile.get("status") != "enabled":
+                continue
+            for variant, config in profile["variants"].items():
+                actual.add((profile["category"], profile["channel"], variant))
+                template_ids.append(config.get("template_id"))
+        self.assertEqual(actual, expected)
+        self.assertTrue(all(template_ids))
+        self.assertEqual(len(template_ids), len(set(template_ids)))
 
 
 if __name__ == "__main__":

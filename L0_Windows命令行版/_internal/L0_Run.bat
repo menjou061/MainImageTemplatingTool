@@ -16,20 +16,25 @@ set "PS_EXE="
 if not exist "%STARTUP_DIR%" mkdir "%STARTUP_DIR%" >nul 2>nul
 >> "%LOG%" echo [%DATE% %TIME%] checkpoint=entered file=_internal\L0_Run.bat
 >> "%LOG%" echo [%DATE% %TIME%] checkpoint=path_resolved internal="%INTERNAL_DIR%" ps1="%PS_SCRIPT%"
+if exist "%STARTUP_DIR%\failure_dialog_shown.marker" del /q "%STARTUP_DIR%\failure_dialog_shown.marker" >nul 2>nul
+
+call :RESOLVE_POWERSHELL
 
 if not "%L0_ENTRY_OK%"=="1" (
   call :WRITE_FAILURE "entry" "run L0_Start.cmd from the parent folder"
+  call :SHOW_FALLBACK_FAILURE
   exit /b 1
 )
 
 if not exist "%PS_SCRIPT%" (
   call :WRITE_FAILURE "runner" "missing _internal\L0_Run.ps1"
+  call :SHOW_FALLBACK_FAILURE
   exit /b 1
 )
 
-call :RESOLVE_POWERSHELL
 if not defined PS_EXE (
   call :WRITE_FAILURE "powershell" "Windows PowerShell 5.1 executable was not found"
+  call :SHOW_FALLBACK_FAILURE
   exit /b 1
 )
 
@@ -37,6 +42,7 @@ if not defined PS_EXE (
 "%PS_EXE%" -STA -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%PS_SCRIPT%" > "%PS_CONSOLE%" 2>&1
 set "EXIT_CODE=%ERRORLEVEL%"
 >> "%LOG%" echo [%DATE% %TIME%] checkpoint=powershell_returned exitCode=%EXIT_CODE%
+if not "%EXIT_CODE%"=="0" if not exist "%STARTUP_DIR%\failure_dialog_shown.marker" call :SHOW_FALLBACK_FAILURE
 exit /b %EXIT_CODE%
 
 :RESOLVE_POWERSHELL
@@ -56,4 +62,10 @@ if not exist "%STARTUP_DIR%" mkdir "%STARTUP_DIR%" >nul 2>nul
 >> "%STARTUP_DIR%\failure.txt" echo psExe=%PS_EXE%
 >> "%STARTUP_DIR%\failure.txt" echo psScript=%PS_SCRIPT%
 >> "%LOG%" echo [%DATE% %TIME%] startup_failure stage="%FAIL_STAGE%" reason="%FAIL_REASON%"
+goto :EOF
+
+:SHOW_FALLBACK_FAILURE
+if not defined PS_EXE goto :EOF
+>> "%LOG%" echo [%DATE% %TIME%] checkpoint=showing_fallback_failure_dialog
+"%PS_EXE%" -STA -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "Add-Type -AssemblyName System.Windows.Forms; [void][System.Windows.Forms.MessageBox]::Show('The tool did not complete. Open the MainImageTemplatingTool startup log for details.','Main Image Templating Tool',[System.Windows.Forms.MessageBoxButtons]::OK,[System.Windows.Forms.MessageBoxIcon]::Error)" >nul 2>&1
 goto :EOF

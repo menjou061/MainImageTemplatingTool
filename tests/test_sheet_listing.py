@@ -92,6 +92,40 @@ class SheetListingTest(unittest.TestCase):
             self.assertEqual(result, 0)
             self.assertEqual(output.getvalue().splitlines(), ["sku-dimensionless"])
 
+    def test_hygiene_variant_is_resolved_from_unique_output_spec(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workbook_path = Path(directory) / "hygiene-800.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "出图数据"
+            sheet.append(["渠道", "是否出图", "输出规格", "输出文件名", "产品图路径", "主卖点"])
+            sheet.append(["天猫官旗", "是", "800", "sku-800", r"C:\materials\one.png", "卖点"])
+            workbook.save(workbook_path)
+
+            self.assertEqual(
+                sheet_listing.resolve_variant_for_workbook(
+                    workbook_path, "出图数据", "hygiene-tmall-v1.2"
+                ),
+                "main-800",
+            )
+
+    def test_hygiene_mixed_output_specs_are_blocked(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workbook_path = Path(directory) / "hygiene-mixed.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "出图数据"
+            sheet.append(["渠道", "是否出图", "输出规格", "输出文件名", "产品图路径", "主卖点"])
+            sheet.append(["天猫官旗", "是", "750", "sku-750", r"C:\materials\one.png", "卖点"])
+            sheet.append(["天猫官旗", "是", "800", "sku-800", r"C:\materials\two.png", "卖点"])
+            workbook.save(workbook_path)
+
+            with self.assertRaises(sheet_listing.ProfileError) as context:
+                sheet_listing.resolve_variant_for_workbook(
+                    workbook_path, "出图数据", "hygiene-tmall-v1.2"
+                )
+            self.assertEqual(context.exception.code, "E_PROFILE_SHEET_MISMATCH")
+
 
 if __name__ == "__main__":
     unittest.main()

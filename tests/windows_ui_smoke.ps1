@@ -6,8 +6,10 @@
     [Parameter(Mandatory = $true)][string]$ArtifactDir,
     [string]$Category = '',
     [string]$Channel = '',
+    [string]$SheetName = '',
     [int]$ExpectedJpgWidth = 800,
     [int]$ExpectedJpgHeight = 800,
+    [int]$ProductCount = 0,
     [switch]$UseSingleProduct,
     [switch]$RequireTextOverflow
 )
@@ -21,12 +23,32 @@ Add-Type @'
 using System;
 using System.Runtime.InteropServices;
 public static class NativeMouse {
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Point {
+        public int X;
+        public int Y;
+    }
+
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr window);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr window, int command);
+    [DllImport("user32.dll")] private static extern bool ScreenToClient(IntPtr window, ref Point point);
+    [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
     public const uint LeftDown = 0x0002;
     public const uint LeftUp = 0x0004;
+
+    public static bool ClickClientPoint(IntPtr window, int screenX, int screenY) {
+        Point point = new Point { X = screenX, Y = screenY };
+        if (!ScreenToClient(window, ref point)) return false;
+
+        const uint WmLeftButtonDown = 0x0201;
+        const uint WmLeftButtonUp = 0x0202;
+        IntPtr position = new IntPtr(unchecked((point.Y << 16) | (point.X & 0xffff)));
+        SendMessage(window, WmLeftButtonDown, new IntPtr(1), position);
+        SendMessage(window, WmLeftButtonUp, IntPtr.Zero, position);
+        return true;
+    }
 }
 '@
 
@@ -151,6 +173,39 @@ function Set-ControlValue {
     $pattern.SetValue($Value)
 }
 
+function Set-CheckedListItem {
+    param([System.Windows.Automation.AutomationElement]$Item)
+    if (-not $Item) { throw '未找到要勾选的商品。' }
+
+    # CheckedListBox keeps selection and check state separately. Send a click
+    # directly to the list HWND so the action does not depend on focus or the
+    # keyboard state. The production submit action below verifies the check
+    # state through the same path used by an operator.
+    $rectangle = $Item.Current.BoundingRectangle
+    if ($rectangle.Width -le 0 -or $rectangle.Height -le 0) {
+        throw '商品复选框不可见，无法勾选。'
+    }
+
+    $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+    $list = $walker.GetParent($Item)
+    if (-not $list -or $list.Current.ControlType -ne [System.Windows.Automation.ControlType]::List) {
+        throw '无法定位商品复选列表控件。'
+    }
+    $listHandle = [IntPtr]$list.Current.NativeWindowHandle
+    if ($listHandle -eq [IntPtr]::Zero) {
+        throw '商品复选列表没有可用的原生窗口句柄。'
+    }
+    if (-not [NativeMouse]::ClickClientPoint(
+        $listHandle,
+        [int]($rectangle.X + 8),
+        [int]($rectangle.Y + ($rectangle.Height / 2))
+    )) {
+        throw '商品复选框坐标转换失败。'
+    }
+
+    Write-SmokeLog '已向商品复选框发送稳定原生点击，等待生产入口验证勾选状态。'
+}
+
 function Capture-Desktop {
     param([string]$Name)
     $bounds = [System.Windows.Forms.SystemInformation]::VirtualScreen
@@ -202,10 +257,21 @@ try {
     }
     $entry = Join-Path $ToolRoot '开始套版.cmd'
     if (-not (Test-Path -LiteralPath $entry -PathType Leaf)) {
+        # Windows tar can decode a Unicode archive member with the active
+        # console code page. The ASCII launcher is equivalent and keeps the
+        # smoke path independent of archive filename decoding.
+        $entry = Join-Path $ToolRoot 'L0_Start.cmd'
+    }
+    if (-not (Test-Path -LiteralPath $entry -PathType Leaf)) {
         throw "未找到用户启动入口：$entry"
     }
     $arguments = '/d /c call "{0}"' -f $entry
-    $process = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\cmd.exe') -ArgumentList $arguments -WindowStyle Normal -PassThru
+    $process = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\cmd.exe') -ArgumentList $arguments -WorkingDirectory $ToolRoot -WindowStyle Normal -PassThru
+    Start-Sleep -Milliseconds 750
+    Write-SmokeLog ("入口进程：PID=$($process.Id)，已退出=$($process.HasExited)，工作目录=$ToolRoot")
+    if ($process.HasExited) {
+        throw "工具入口启动后立即退出，退出码：$($process.ExitCode)"
+    }
 
     $channelWindow = Wait-DesktopWindow -Title '选择品类和渠道' -TimeoutSeconds 45
     Show-AutomationWindow -Window $channelWindow
@@ -248,6 +314,15 @@ try {
 
     $mainWindow = Wait-DesktopWindow -Title '电商主图套版工具 1.2'
     Show-AutomationWindow -Window $mainWindow
+    if (-not [string]::IsNullOrWhiteSpace($SheetName)) {
+        $sheetCombo = Get-Control -Root $mainWindow -Name '3  数据工作表' -ControlType ([System.Windows.Automation.ControlType]::ComboBox)
+        if (-not $sheetCombo) { throw '未找到数据工作表下拉框。' }
+        Select-ComboItem -Combo $sheetCombo -Name $SheetName
+        Start-Sleep -Seconds 3
+        $mainWindow = Wait-DesktopWindow -Title '电商主图套版工具 1.2'
+        Show-AutomationWindow -Window $mainWindow
+        Write-SmokeLog "已显式选择 Sheet：$SheetName"
+    }
     Write-ControlSnapshot -Window $mainWindow -Label '表格已加载'
     Capture-Desktop -Name '02-表格已加载.png'
 
@@ -257,13 +332,27 @@ try {
     $productListControl = Get-Control -Root $mainWindow -Name '4  商品范围' -ControlType ([System.Windows.Automation.ControlType]::List)
     if (-not $productListControl) { throw '商品列表为空。' }
     Show-AutomationWindow -Window $mainWindow
-    $productListControl.SetFocus()
-    [System.Windows.Forms.SendKeys]::SendWait('{HOME}')
-    [System.Windows.Forms.SendKeys]::SendWait(' ')
-    Start-Sleep -Seconds 1
+    $productItems = @($productListControl.FindAll(
+        [System.Windows.Automation.TreeScope]::Children,
+        (New-Object System.Windows.Automation.PropertyCondition(
+            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+            [System.Windows.Automation.ControlType]::ListItem
+        ))
+    ))
+    if ($productItems.Count -lt 1) { throw '商品列表没有可选商品。' }
+    $selectionCount = if ($ProductCount -gt 0) { $ProductCount } else { 1 }
+    if ($selectionCount -gt $productItems.Count) {
+        throw "请求勾选 $selectionCount 个商品，但当前列表只有 $($productItems.Count) 个。"
+    }
+    for ($selectionIndex = 0; $selectionIndex -lt $selectionCount; $selectionIndex++) {
+        Set-CheckedListItem -Item $productItems[$selectionIndex]
+        Start-Sleep -Milliseconds 250
+    }
+    Write-SmokeLog "已勾选 $selectionCount 个商品。"
+    Start-Sleep -Milliseconds 500
     Capture-Desktop -Name '03-商品已勾选.png'
 
-    if (-not $UseSingleProduct) {
+    if (-not $UseSingleProduct -and $ProductCount -le 0) {
         # The checked-item state is visually verified before switching back to
         # the full-sheet path used by the default regression.
         $allRadio = Get-Control -Root $mainWindow -Name '全部商品' -ControlType ([System.Windows.Automation.ControlType]::RadioButton)
@@ -271,7 +360,15 @@ try {
         Start-Sleep -Milliseconds 500
     }
 
-    Invoke-Control -Control (Get-Control -Root $mainWindow -Name '开始生成' -ControlType ([System.Windows.Automation.ControlType]::Button))
+    $startButton = Get-Control -Root $mainWindow -Name '开始生成' -ControlType ([System.Windows.Automation.ControlType]::Button)
+    Invoke-Control -Control $startButton
+    if ($UseSingleProduct) {
+        Start-Sleep -Milliseconds 800
+        if (Get-DesktopWindow -Title '电商主图套版工具 1.2') {
+            throw '生产入口仍停留在商品范围页，复选框未被实际勾选。'
+        }
+        Write-SmokeLog '生产入口已接受单商品选择，复选框状态验证通过。'
+    }
     Write-SmokeLog '已点击开始生成。'
 
     $deadline = (Get-Date).AddMinutes(4)
@@ -332,6 +429,9 @@ try {
     if ($UseSingleProduct -and $resultRows.Count -ne 1) {
         throw "单商品回归应产生 1 条结果，实际为 $($resultRows.Count) 条。"
     }
+    if ($ProductCount -gt 0 -and $resultRows.Count -ne $ProductCount) {
+        throw "指定商品回归应产生 $ProductCount 条结果，实际为 $($resultRows.Count) 条。"
+    }
 
     $blockingStatuses = @('处理失败', '模板错误', '数据需核对', '缺图', '字段为空')
     $blockingRows = @($resultRows | Where-Object {
@@ -359,8 +459,11 @@ try {
         }
     }
 
-    $jpgFiles = @(Get-ChildItem -LiteralPath $jpgDirectory -Filter '*.jpg' -File -ErrorAction SilentlyContinue)
-    $psdFiles = @(Get-ChildItem -LiteralPath $psdDirectory -Filter '*.psd' -File -ErrorAction SilentlyContinue)
+    # Approved profiles isolate each variant below JPG成品/PSD源文件, while
+    # legacy JD keeps the files directly under those folders. Count recursively
+    # so the output gate validates both layouts without weakening file checks.
+    $jpgFiles = @(Get-ChildItem -LiteralPath $jpgDirectory -Filter '*.jpg' -File -Recurse -ErrorAction SilentlyContinue)
+    $psdFiles = @(Get-ChildItem -LiteralPath $psdDirectory -Filter '*.psd' -File -Recurse -ErrorAction SilentlyContinue)
     if ($jpgFiles.Count -ne $resultRows.Count -or $psdFiles.Count -ne $resultRows.Count) {
         throw "成品数与结果报告不一致：结果=$($resultRows.Count)，JPG=$($jpgFiles.Count)，PSD=$($psdFiles.Count)"
     }

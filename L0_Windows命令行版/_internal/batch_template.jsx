@@ -28,6 +28,18 @@ function isDisabledImageValue(value) {
     return normalized === "无" || normalized === "无.png" || normalized === "none" || normalized === "null";
 }
 
+function isOptionalProfileVariable(profile, required) {
+    if (!profile || !profile.optional_psd_variables) {
+        return false;
+    }
+    for (var index = 0; index < profile.optional_psd_variables.length; index++) {
+        if (String(profile.optional_psd_variables[index]) === String(required.name)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 function isRequiredTextKey(key) {
     return key === "折扣" || key === "券名" || key === "券门槛" ||
         key === "活动时间" || key === "到手" || key === "价格1" ||
@@ -436,6 +448,9 @@ function requiredBindingErrors(container, profile, scope) {
         var required = profile.required_psd_variables[index];
         var collection = required.type === "text" ? layerIndex.text : layerIndex.image;
         if (!collection[required.name] || collection[required.name].length === 0) {
+            if (isOptionalProfileVariable(profile, required)) {
+                continue;
+            }
             errors.push("E_VAR_UNBOUND: " + scope + required.name + " 未绑定到 " + (required.type === "text" ? "@文本层" : "!智能对象"));
             continue;
         }
@@ -478,8 +493,11 @@ function recordLayoutBindingErrors(template, profile) {
         }
         var layerIndex = { text: {}, image: {}, switches: {} };
         addLayers(layout, layerIndex);
-        if (!layerIndex.switches["赠品顶部"] || !layerIndex.switches["赠品区域"]) {
-            errors.push("E_VAR_UNBOUND: " + scope + "赠品开关组未完整绑定");
+        var giftSwitches = hygieneGiftSwitchNames();
+        for (var giftSwitchIndex = 0; giftSwitchIndex < giftSwitches.length; giftSwitchIndex++) {
+            if (!layerIndex.switches[giftSwitches[giftSwitchIndex]]) {
+                errors.push("E_VAR_UNBOUND: " + scope + "赠品开关组未完整绑定：" + giftSwitches[giftSwitchIndex]);
+            }
         }
     }
     return errors;
@@ -544,7 +562,18 @@ function setSwitches(layerIndex, record, result) {
 }
 
 function isGiftSwitchKey(key) {
-    return key === "赠品顶部" || key === "赠品区域";
+    var giftSwitches = hygieneGiftSwitchNames();
+    for (var index = 0; index < giftSwitches.length; index++) {
+        if (key === giftSwitches[index]) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function hygieneGiftSwitchNames() {
+    var configured = CHANNEL_PROFILE && CHANNEL_PROFILE.record_layout && CHANNEL_PROFILE.record_layout.gift_switches;
+    return configured && configured.length ? configured : ["赠品顶部", "赠品区域"];
 }
 
 function optionalGroupHasValues(groups, record) {

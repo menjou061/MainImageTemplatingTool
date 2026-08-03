@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+"""Validate the approved sidecar identity for a Photoshop template.
+
+An approved PSD is accompanied by ``<template>.template.json``.  The sidecar
+is deliberately checked before Photoshop starts so a same-size or
+layer-superset PSD cannot be mistaken for an approved channel template.
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+# The embedded Windows runtime uses ``python311._pth`` and does not add the
+# script directory to ``sys.path`` when this file is invoked by absolute path.
+SCRIPT_DIR = str(Path(__file__).resolve().parent)
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
+
+from channel_profile import ProfileError, get_profile
+
+
+class TemplateIdentityError(ValueError):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(f"{code}: {message}")
+        self.code = code
+
+
+def manifest_path(psd_path: Path) -> Path:
+    return psd_path.with_name(psd_path.name + ".template.json")
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def write_template_identity(
+    psd_path: Path,
+    profile_id: str,
+    variant: str,
+    *,
+    source_psd_path: Path | None = None,
+) -> dict:
+    """Write a sidecar for a PSD that has already passed template preparation.
+
+    The sidecar is metadata next to the PSD; the PSD bytes are never changed.
+    Callers still run ``validate_template_identity`` afterwards so a failed
+    write or a changed file cannot be treated as approved.
+    """
+    if not psd_path.is_file():
+        raise TemplateIdentityError("E_TEMPLATE_IDENTITY_MISSING", f"PSD 不存在：{psd_path}")
+    if source_psd_path is None:
+        raise TemplateIdentityError(
+            "E_TEMPLATE_IDENTITY_INVALID",
+            "只能为本次自动生成的 PSD 副本写入身份文件；缺少原始 PSD 路径。",
+        )
+    if not source_psd_path.is_file():
+        raise TemplateIdentityError("E_TEMPLATE_IDENTITY_MISSING", f"原始 PSD 不存在：{source_psd_path}")
+    if psd_path.resolve() == source_psd_path.resolve():
+        raise TemplateIdentityError(
+            "E_TEMPLATE_IDENTITY_INVALID",
+            "原始 PSD 不能被自动签发身份文件；请先生成独立模板副本。",
+        )
+    sidecar = manifest_path(psd_path)
+    if sidecar.exists():
+        raise TemplateIdentityError(
+            "E_TEMPLATE_IDENTITY_INVALID",
+            "模板副本已有身份文件；不会覆盖或重签历史副本。",
+        )
+    profile = get_profile(profile_id, variant)
+    expected_template_id = str(profile.get("template_id") or "")
+    if not expected_template_id:
+        raise TemplateIdentityError("E_CONFIG_MISMATCH", f"{profile_id}/{variant} 未配置 template_id")
+    manifest = {
+        "template_id": expected_template_id,
+        "profile_id": profile_id,
+        "profile_version": str(profile["profile_version"]),
+        "variant": variant,
+        "psd_sha256": sha256_file(psd_path),
+    }
+    sidecar.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return {"template_id": expected_template_id, "manifest": str(sidecar)}
+
+
+def validate_template_identity(psd_path: Path, profile_id: str, variant: str) -> dict:
+    if not psd_path.is_file():
+        raise TemplateIdentityError("E_TEMPLATE_IDENTITY_MISSING", f"PSD 不存在：{psd_path}")
+    profile = get_profile(profile_id, variant)
+    expected_template_id = str(profile.get("template_id") or "")
+    if not expected_template_id:
+        raise TemplateIdentityError("E_CONFIG_MISMATCH", f"{profile_id}/{variant} 未配置 template_id")
+    sidecar = manifest_path(psd_path)
+    if not sidecar.is_file():
+        raise TemplateIdentityError("E_TEMPLATE_IDENTITY_MISSING", f"缺少批准模板身份文件：{sidecar.name}")
+    try:
+        # Windows PowerShell 5.1's UTF8 Set-Content emits a BOM. Accept it
+        # while still requiring strict JSON and the full identity contract.
+        manifest = json.loads(sidecar.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise TemplateIdentityError("E_TEMPLATE_IDENTITY_INVALID", f"无法读取模板身份文件：{error}") from error
+    expected = {
+        "template_id": expected_template_id,
+        "profile_id": profile_id,
+        "profile_version": str(profile["profile_version"]),
+        "variant": variant,
+    }
+    mismatches = [key for key, value in expected.items() if str(manifest.get(key, "")) != value]
+    if mismatches:
+        raise TemplateIdentityError("E_TEMPLATE_IDENTITY_MISMATCH", "模板身份不匹配：" + "、".join(mismatches))
+    supplied_hash = str(manifest.get("psd_sha256", "")).lower()
+    if len(supplied_hash) != 64 or any(char not in "0123456789abcdef" for char in supplied_hash):
+        raise TemplateIdentityError("E_TEMPLATE_IDENTITY_INVALID", "模板身份文件缺少有效 psd_sha256")
+    if sha256_file(psd_path) != supplied_hash:
+        raise TemplateIdentityError("E_TEMPLATE_IDENTITY_MISMATCH", "PSD 内容与批准模板身份文件不一致")
+    return {"template_id": expected_template_id, "manifest": str(sidecar)}
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--psd", required=True)
+    parser.add_argument("--profile", required=True)
+    parser.add_argument("--variant", required=True)
+    parser.add_argument("--write", action="store_true", help="为已准备好的 PSD 写入 SHA-256 sidecar")
+    parser.add_argument("--source-psd", help="自动生成副本对应的原始 PSD；--write 时必填")
+    args = parser.parse_args()
+    try:
+        if args.write:
+            result = write_template_identity(
+                Path(args.psd),
+                args.profile,
+                args.variant,
+                source_psd_path=Path(args.source_psd) if args.source_psd else None,
+            )
+        else:
+            result = validate_template_identity(Path(args.psd), args.profile, args.variant)
+    except (TemplateIdentityError, ProfileError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(json.dumps(result, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

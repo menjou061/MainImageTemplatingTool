@@ -38,6 +38,12 @@ $entryReportCsv = Join-Path $diagnosticDir 'failure.csv'
 $entryStatusJson = Join-Path $diagnosticDir 'status.json'
 $entryStatusTxt = Join-Path $diagnosticDir 'status.txt'
 $runtimeProbeTxt = Join-Path $diagnosticDir 'runtime_probe.txt'
+$startupDiagnosticDir = if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+    Join-Path $env:LOCALAPPDATA 'MainImageTemplatingTool\startup'
+} else {
+    Join-Path $env:TEMP 'MainImageTemplatingTool\startup'
+}
+$uiFailureMarker = Join-Path $startupDiagnosticDir 'failure_dialog_shown.marker'
 $settingsPath = Join-Path $userDataRoot 'settings.json'
 $taskHistoryPath = Join-Path $diagnosticDir '任务历史.csv'
 $ps1Marker = Join-Path $diagnosticDir 'ps1_started.marker'
@@ -45,6 +51,7 @@ $cleanScript = Join-Path $scriptDir 'clean_data.py'
 $sheetScript = Join-Path $scriptDir 'l0_list_sheets.py'
 $batchScript = Join-Path $scriptDir 'batch_template.jsx'
 $templatePrepareScript = Join-Path $scriptDir 'template_prepare.jsx'
+$templateIdentityScript = Join-Path $scriptDir 'template_identity.py'
 $channelProfilesPath = Join-Path $scriptDir 'channel_profiles.json'
 $runtimeRoot = Join-Path $scriptDir 'runtime'
 $privatePythonDir = Join-Path $runtimeRoot 'python'
@@ -224,7 +231,7 @@ function Write-TaskHistory {
 }
 
 function Clear-StaleDiagnostics {
-    foreach ($path in @($entryReportTxt, $entryReportCsv, $runtimeProbeTxt)) {
+    foreach ($path in @($entryReportTxt, $entryReportCsv, $runtimeProbeTxt, $uiFailureMarker)) {
         try {
             if (Test-Path -LiteralPath $path -PathType Leaf) {
                 Remove-Item -LiteralPath $path -Force -ErrorAction Stop
@@ -512,6 +519,10 @@ function Save-UserSettings {
         sheetName = $SheetName
         productName = $ProductName
         updatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    }
+    $timeoutSetting = Get-SettingText -Settings $script:Settings -Name 'photoshopTimeoutSeconds'
+    if (-not [string]::IsNullOrWhiteSpace($timeoutSetting)) {
+        $payload | Add-Member -NotePropertyName 'photoshopTimeoutSeconds' -NotePropertyValue $timeoutSetting
     }
     try {
         $json = $payload | ConvertTo-Json -Depth 4
@@ -1236,7 +1247,7 @@ function Select-TaskSettings {
         $previewVariantId = ''
         if ($ProfileConfig -and $sheetCombo.SelectedItem) {
             try {
-                $previewVariantId = Get-VariantForSheet -ProfileConfig $ProfileConfig -SheetName ([string]$sheetCombo.SelectedItem)
+                $previewVariantId = Get-VariantForSheet -ProfileConfig $ProfileConfig -SheetName ([string]$sheetCombo.SelectedItem) -ExcelPath $excelBox.Text.Trim() -Python $Python
                 $previewVariant = $ProfileConfig.variants.$previewVariantId
                 $variantHint = " 当前规格：$previewVariantId（$($previewVariant.width)x$($previewVariant.height)）。"
             } catch {
@@ -1790,14 +1801,12 @@ function Get-PhotoshopReadiness {
             Detail = "Photoshop 进程无响应；进程 ID $($photoshopProcess.Id)。"
         }
     }
+    # Photoshop 2026 can report a zero MainWindowHandle while its interactive
+    # window is already visible. The COM probe below is the authoritative
+    # check, so retain this only as task-record context instead of blocking.
+    $windowWarning = ''
     if ([int64]$photoshopProcess.MainWindowHandle -eq 0) {
-        return [pscustomobject]@{
-            Ready = $false
-            Code = 'PS_NOT_READY'
-            Version = ''
-            Message = 'Photoshop 正在启动或尚未显示首页。请处理登录、授权或弹窗，进入首页后再试。'
-            Detail = "Photoshop 进程存在但没有主窗口；进程 ID $($photoshopProcess.Id)。"
-        }
+        $windowWarning = 'W_PS_WINDOW_HANDLE_UNAVAILABLE：未读取到 Photoshop 主窗口句柄，将继续验证 COM 自动化接口。'
     }
 
     $version = ''
@@ -1831,7 +1840,8 @@ function Get-PhotoshopReadiness {
         Code = 'PS_READY'
         Version = $version
         Message = "Photoshop $version 已就绪。"
-        Detail = "进程 ID $($photoshopProcess.Id)；主窗口句柄 $($photoshopProcess.MainWindowHandle)。"
+        Detail = "进程 ID $($photoshopProcess.Id)；主窗口句柄 $($photoshopProcess.MainWindowHandle)。$windowWarning"
+        Warning = $windowWarning
     }
 }
 
@@ -1839,6 +1849,9 @@ function Start-Photoshop {
     $readiness = Get-PhotoshopReadiness
     if (-not $readiness.Ready) {
         throw "$($readiness.Message) 错误码：$($readiness.Code)。"
+    }
+    if (-not [string]::IsNullOrWhiteSpace([string]$readiness.Warning)) {
+        Add-Log "Photoshop 前置提示：$($readiness.Warning)"
     }
     foreach ($progId in Get-PhotoshopComProgIds) {
         try {
@@ -1864,12 +1877,19 @@ function Invoke-PhotoshopJavaScript {
     if ($progIds.Count -eq 0) {
         throw 'E_PHOTOSHOP_UNAVAILABLE：未找到 Photoshop COM ProgID。'
     }
+    # A PowerShell job serializes nested arrays inconsistently. Pass one
+    # newline-delimited scalar and rebuild the exact ProgID list in the job.
+    $progIdPayload = (($progIds | ForEach-Object { [string]$_ }) -join "`n")
     $job = $null
     try {
         $job = Start-Job -ScriptBlock {
-            param($candidateProgIds, $jsx)
+            param([string]$candidateProgIdPayload, [string]$jsx)
             $lastError = ''
-            foreach ($candidateProgId in @($candidateProgIds)) {
+            $candidateProgIds = @(
+                ($candidateProgIdPayload -split "`n") |
+                    Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+            )
+            foreach ($candidateProgId in $candidateProgIds) {
                 try {
                     $app = New-Object -ComObject $candidateProgId -ErrorAction Stop
                     try {
@@ -1882,7 +1902,7 @@ function Invoke-PhotoshopJavaScript {
                 }
             }
             throw "DoJavaScript 调用失败：$lastError"
-        } -ArgumentList (,$progIds), $ScriptText -ErrorAction Stop
+        } -ArgumentList $progIdPayload, $ScriptText -ErrorAction Stop
         $deadline = (Get-Date).AddSeconds($timeout)
         while ($job.State -eq 'Running' -and (Get-Date) -lt $deadline) {
             Wait-Job -Job $job -Timeout 1 | Out-Null
@@ -1931,7 +1951,8 @@ function Invoke-TemplatePreparationCheck {
     param(
         [object]$Application,
         [string]$TemplatePath,
-        [string]$Mode
+        [string]$Mode,
+        [bool]$ForceCopy = $false
     )
     if (-not (Test-Path -LiteralPath $templatePrepareScript -PathType Leaf)) {
         throw "缺少 PSD 模板检测脚本：$templatePrepareScript"
@@ -1940,7 +1961,8 @@ function Invoke-TemplatePreparationCheck {
     $script:OpenedDocument = $Application.Open($TemplatePath)
     try {
         $templateText = [System.IO.File]::ReadAllText($templatePrepareScript, [System.Text.Encoding]::UTF8)
-        $prefix = "`$.global.__TEMPLATE_PREP_INPUTS__ = { mode: '" + $Mode + "', profile: " + $profileJson + " };"
+        $forceCopyLiteral = if ($ForceCopy) { 'true' } else { 'false' }
+        $prefix = "`$.global.__TEMPLATE_PREP_INPUTS__ = { mode: '" + $Mode + "', forceCopy: " + $forceCopyLiteral + ", profile: " + $profileJson + " };"
         $scriptText = $prefix + "`r`n" + $templateText
         $rawResult = Invoke-PhotoshopJavaScript -Application $Application -ScriptText $scriptText
         $result = ConvertFrom-TemplatePreparationResult -RawResult $rawResult
@@ -1963,10 +1985,36 @@ function Get-PreparedTemplateSibling {
     return $null
 }
 
+function Get-PreparedTemplatePaths {
+    param([string]$TemplatePath)
+    $directory = Split-Path -Parent $TemplatePath
+    $baseName = [System.IO.Path]::GetFileNameWithoutExtension($TemplatePath)
+    if (-not (Test-Path -LiteralPath $directory -PathType Container)) {
+        return @()
+    }
+    return @(
+        Get-ChildItem -LiteralPath $directory -File -Filter ($baseName + '_套版模板*.psd') -ErrorAction SilentlyContinue |
+            ForEach-Object { [System.IO.Path]::GetFullPath($_.FullName) }
+    )
+}
+
+function Test-PreparedTemplateWasPresent {
+    param(
+        [string]$TemplatePath,
+        [string[]]$ExistingPaths
+    )
+    $candidate = [System.IO.Path]::GetFullPath($TemplatePath)
+    return @($ExistingPaths | Where-Object {
+        [string]::Equals([System.IO.Path]::GetFullPath($_), $candidate, [System.StringComparison]::OrdinalIgnoreCase)
+    }).Count -gt 0
+}
+
 function Resolve-TemplateForTask {
     param(
         [object]$Application,
-        [string]$TemplatePath
+        [string]$TemplatePath,
+        [bool]$AllowExistingPreparedSibling = $true,
+        [bool]$ForceFreshCopy = $false
     )
     # The hygiene template can contain more than a thousand design layers.
     # Its active layout groups are known after data preflight, so open it once
@@ -1974,18 +2022,22 @@ function Resolve-TemplateForTask {
     # separate check invocation.
     if ($selectedProfile -and $selectedProfile.layout -eq 'record_rows') {
         Set-RunProgress -Stage 'PSD 模板体检与映射' -Detail '仅检查并映射本次商品实际使用的版式图层；未使用版式不会改造。'
-        $preparedSibling = Get-PreparedTemplateSibling -TemplatePath $TemplatePath
-        if ($preparedSibling) {
-            Add-Log "检测到业务方提供的标准模板副本，先体检副本：$preparedSibling"
-            $siblingCheck = Invoke-TemplatePreparationCheck -Application $Application -TemplatePath $preparedSibling -Mode 'check'
-            if ($siblingCheck.Status -eq 'READY') {
-                Add-Log "标准模板副本体检通过，本次任务直接使用副本：$preparedSibling"
-                return $preparedSibling
+        if ($AllowExistingPreparedSibling) {
+            $preparedSibling = Get-PreparedTemplateSibling -TemplatePath $TemplatePath
+            if ($preparedSibling) {
+                Add-Log "检测到业务方提供的标准模板副本，先体检副本：$preparedSibling"
+                $siblingCheck = Invoke-TemplatePreparationCheck -Application $Application -TemplatePath $preparedSibling -Mode 'check'
+                if ($siblingCheck.Status -eq 'READY') {
+                    Add-Log "标准模板副本体检通过，本次任务直接使用副本：$preparedSibling"
+                    return $preparedSibling
+                }
+                throw "E_TEMPLATE_PREP_REQUIRED：标准模板副本未通过体检：$($siblingCheck.Message)"
             }
-            throw "E_TEMPLATE_PREP_REQUIRED：标准模板副本未通过体检：$($siblingCheck.Message)"
+        } else {
+            Add-Log '原 PSD 缺少身份文件；忽略历史模板副本，只为本次任务生成新的独立副本。'
         }
-        $targeted = Invoke-TemplatePreparationCheck -Application $Application -TemplatePath $TemplatePath -Mode 'prepare'
-        if ($targeted.Status -eq 'READY') {
+        $targeted = Invoke-TemplatePreparationCheck -Application $Application -TemplatePath $TemplatePath -Mode 'prepare' -ForceCopy:$ForceFreshCopy
+        if ($targeted.Status -eq 'READY' -and -not $ForceFreshCopy) {
             Add-Log 'PSD 模板已通过本次版式体检，直接使用原模板。'
             return $TemplatePath
         }
@@ -1997,16 +2049,23 @@ function Resolve-TemplateForTask {
     }
 
     $check = Invoke-TemplatePreparationCheck -Application $Application -TemplatePath $TemplatePath -Mode 'check'
-    if ($check.Status -eq 'READY') {
+    if ($check.Status -eq 'READY' -and -not $ForceFreshCopy) {
         return $TemplatePath
     }
     if ($check.Status -eq 'AMBIGUOUS') {
         throw "PSD 模板未完成智能化改造，且无法安全自动判断：$($check.Message)"
     }
-    if ($check.Status -ne 'NEEDS_PREP') {
+    if ($check.Status -ne 'NEEDS_PREP' -and -not ($ForceFreshCopy -and $check.Status -eq 'READY')) {
         throw "PSD 模板检测失败：$($check.Message)"
     }
-    $canAutoPrepare = $selectedProfile -and $selectedProfile.template_bindings
+    # Deterministic legacy aliases (for example @时间 and !堆图) are
+    # validated by template_prepare.jsx before reaching this branch. They are
+    # safe to prepare in headless regression runs just like explicit profile
+    # bindings; ambiguous PSDs still fail the earlier check.
+    $canAutoPrepare = $selectedProfile -and (
+        $selectedProfile.template_bindings -or
+        ($selectedProfile.profile_id -eq 'legacy-v1' -and ($check.Status -eq 'NEEDS_PREP' -or $ForceFreshCopy))
+    )
     if ($NoUi -and -not $canAutoPrepare) {
         throw "PSD 模板未完成智能化改造：$($check.Message)"
     }
@@ -2025,12 +2084,61 @@ function Resolve-TemplateForTask {
     }
 
     Set-RunProgress -Stage '智能化改造 PSD 模板' -Detail '正在生成模板副本并转换商品图智能对象，原始 PSD 不会被修改。'
-    $prepared = Invoke-TemplatePreparationCheck -Application $Application -TemplatePath $TemplatePath -Mode 'prepare'
+    $prepared = Invoke-TemplatePreparationCheck -Application $Application -TemplatePath $TemplatePath -Mode 'prepare' -ForceCopy:$ForceFreshCopy
     if ($prepared.Status -ne 'PREPARED' -or [string]::IsNullOrWhiteSpace($prepared.TemplatePath) -or -not (Test-Path -LiteralPath $prepared.TemplatePath -PathType Leaf)) {
         throw "PSD 自动智能化改造未完成：$($prepared.Message)"
     }
     Add-Log "PSD 模板已自动改造为副本：$($prepared.TemplatePath)"
     return $prepared.TemplatePath
+}
+
+function Test-TemplateIdentity {
+    param(
+        [object]$Python,
+        [string]$TemplatePath,
+        [string]$ProfileId,
+        [string]$VariantId
+    )
+    # A missing sidecar is an expected first-import state for the supported
+    # legacy bootstrap. Capture Python stderr as data here; the caller decides
+    # whether its error code is a permitted bootstrap or a hard block.
+    $output = @()
+    $exitCode = 1
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $output = @(Invoke-Python -Python $Python -Arguments @(
+                $templateIdentityScript, '--psd', $TemplatePath, '--profile', $ProfileId, '--variant', $VariantId
+            ) 2>&1)
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    return [pscustomobject]@{
+        Passed = ($exitCode -eq 0)
+        Detail = ((@($output | ForEach-Object { [string]$_ })) -join '；')
+    }
+}
+
+function Write-PreparedTemplateIdentity {
+    param(
+        [object]$Python,
+        [string]$TemplatePath,
+        [string]$SourcePsdPath,
+        [string]$ProfileId,
+        [string]$VariantId
+    )
+    $output = @(Invoke-Python -Python $Python -Arguments @(
+            $templateIdentityScript, '--write', '--psd', $TemplatePath, '--source-psd', $SourcePsdPath, '--profile', $ProfileId, '--variant', $VariantId
+        ) 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        throw "E_TEMPLATE_IDENTITY_INVALID：无法为已准备 PSD 写入身份文件。$($output -join '；')"
+    }
+    $verified = Test-TemplateIdentity -Python $Python -TemplatePath $TemplatePath -ProfileId $ProfileId -VariantId $VariantId
+    if (-not $verified.Passed) {
+        throw "E_TEMPLATE_IDENTITY_INVALID：生成 PSD 身份文件后复核失败。$($verified.Detail)"
+    }
+    Add-Log "已为自动生成的模板副本写入并复核身份文件：$($output -join '')"
 }
 
 function Get-ElapsedText {
@@ -2128,6 +2236,35 @@ function Show-TaskCompletionDialog {
     [void]$form.ShowDialog()
 }
 
+function Show-TaskFailureDialog {
+    param([string]$ErrorSummary)
+    try {
+        $location = if ($taskRecordDir) { $taskRecordDir } else { $diagnosticDir }
+        $errorCode = if ($ErrorSummary -match '(E_[A-Z_]+)') { $Matches[1] } else { 'E_TASK_FAILED' }
+        $detail = [string]$ErrorSummary
+        if ($detail.Length -gt 900) {
+            $detail = $detail.Substring(0, 900) + '...'
+        }
+        $text = @(
+            '本次任务未完成，未生成可交付成品。',
+            "当前阶段：$script:Stage",
+            "错误码：$errorCode",
+            "详情：$detail",
+            "任务记录：$location"
+        ) -join "`r`n"
+        [void][System.Windows.Forms.MessageBox]::Show(
+            $text,
+            '套版未完成',
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error
+        )
+        return $true
+    } catch {
+        Add-Log "显示失败提示窗口失败：$($_.Exception.Message)"
+        return $false
+    }
+}
+
 function ConvertTo-ProcessArgument {
     param([string]$Value)
     return '"' + ([string]$Value).Replace('"', '""') + '"'
@@ -2136,19 +2273,41 @@ function ConvertTo-ProcessArgument {
 function Get-VariantForSheet {
     param(
         [object]$ProfileConfig,
-        [string]$SheetName
+        [string]$SheetName,
+        [string]$ExcelPath = '',
+        [object]$Python = $null
     )
     $namedVariants = @($ProfileConfig.variants.PSObject.Properties | Where-Object {
         $_.Value -and -not [string]::IsNullOrWhiteSpace([string]$_.Value.sheet_name)
     })
-    if ($namedVariants.Count -eq 0) {
-        return [string]$ProfileConfig.default_variant
+    if ($namedVariants.Count -gt 0) {
+        $matches = @($namedVariants | Where-Object { [string]$_.Value.sheet_name -eq $SheetName })
+        if ($matches.Count -ne 1) {
+            throw "E_PROFILE_SHEET_MISMATCH：Sheet '$SheetName' 未匹配到唯一的模板规格，请选择已配置的运营 Sheet。"
+        }
+        return [string]$matches[0].Name
     }
-    $matches = @($namedVariants | Where-Object { [string]$_.Value.sheet_name -eq $SheetName })
-    if ($matches.Count -ne 1) {
-        throw "E_PROFILE_SHEET_MISMATCH：Sheet '$SheetName' 未匹配到唯一的模板规格，请选择已配置的运营 Sheet。"
+    $outputLabelVariants = @($ProfileConfig.variants.PSObject.Properties | Where-Object {
+        $_.Value -and -not [string]::IsNullOrWhiteSpace([string]$_.Value.output_label)
+    })
+    if ($outputLabelVariants.Count -gt 0) {
+        if ([string]::IsNullOrWhiteSpace($ExcelPath) -or [string]::IsNullOrWhiteSpace($Python)) {
+            throw "E_PROFILE_SHEET_MISMATCH：$SheetName 需要从 Excel 输出规格解析模板规格。"
+        }
+        $resolved = @(Invoke-Python -Python $Python -Arguments @(
+                $sheetScript, '--resolve-variant', $ExcelPath, $SheetName,
+                '--profile', [string]$ProfileConfig.profile_id
+            ) 2>&1)
+        if ($LASTEXITCODE -ne 0) {
+            throw ($resolved -join '；')
+        }
+        $candidate = @($resolved | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Select-Object -Last 1)
+        if ($candidate.Count -ne 1) {
+            throw "E_PROFILE_SHEET_MISMATCH：$SheetName 未解析到唯一模板规格。"
+        }
+        return [string]$candidate[0]
     }
-    return [string]$matches[0].Name
+    return [string]$ProfileConfig.default_variant
 }
 
 try {
@@ -2205,6 +2364,12 @@ try {
     if ($selectedVariant.required_psd_variables) {
         $selectedProfile | Add-Member -NotePropertyName required_psd_variables -NotePropertyValue $selectedVariant.required_psd_variables -Force
     }
+    if ($selectedVariant.record_layout) {
+        $selectedProfile | Add-Member -NotePropertyName record_layout -NotePropertyValue $selectedVariant.record_layout -Force
+    }
+    if ($selectedVariant.text_fit) {
+        $selectedProfile | Add-Member -NotePropertyName text_fit -NotePropertyValue $selectedVariant.text_fit -Force
+    }
     $profileJson = $selectedProfile | ConvertTo-Json -Depth 8 -Compress
     Add-Log "Profile：$profileId@$($selectedProfile.profile_version)，variant：$variantId，目标尺寸：$($selectedVariant.width)x$($selectedVariant.height)"
 
@@ -2257,7 +2422,7 @@ try {
         throw 'E_PROFILE_SHEET_MISMATCH：未选择数据工作表。'
     }
     if ($selectedProfile.variant_selection -eq 'sheet') {
-        $sheetVariantId = Get-VariantForSheet -ProfileConfig $selectedProfile -SheetName $sheetName
+        $sheetVariantId = Get-VariantForSheet -ProfileConfig $selectedProfile -SheetName $sheetName -ExcelPath $excelPath -Python $python
         if (-not [string]::IsNullOrWhiteSpace($Variant) -and $Variant -ne $sheetVariantId) {
             throw "E_PROFILE_SHEET_MISMATCH：Sheet '$sheetName' 对应 $sheetVariantId，不能使用 $Variant。"
         }
@@ -2269,6 +2434,8 @@ try {
         if ($selectedVariant.export_size) { $selectedProfile | Add-Member -NotePropertyName export_size -NotePropertyValue $selectedVariant.export_size -Force }
         if ($selectedVariant.template_bindings) { $selectedProfile | Add-Member -NotePropertyName template_bindings -NotePropertyValue $selectedVariant.template_bindings -Force }
         if ($selectedVariant.required_psd_variables) { $selectedProfile | Add-Member -NotePropertyName required_psd_variables -NotePropertyValue $selectedVariant.required_psd_variables -Force }
+        if ($selectedVariant.record_layout) { $selectedProfile | Add-Member -NotePropertyName record_layout -NotePropertyValue $selectedVariant.record_layout -Force }
+        if ($selectedVariant.text_fit) { $selectedProfile | Add-Member -NotePropertyName text_fit -NotePropertyValue $selectedVariant.text_fit -Force }
         $profileJson = $selectedProfile | ConvertTo-Json -Depth 8 -Compress
         Add-Log "按 Sheet 匹配规格：$sheetName -> $variantId（$($selectedVariant.width)x$($selectedVariant.height)）"
     }
@@ -2307,6 +2474,7 @@ try {
     if (-not (Test-Path -LiteralPath $cleanScript)) { throw "缺少清洗脚本：$cleanScript" }
     if (-not (Test-Path -LiteralPath $sheetScript)) { throw "缺少 Sheet 读取脚本：$sheetScript" }
     if (-not (Test-Path -LiteralPath $batchScript)) { throw "缺少 Photoshop JSX：$batchScript" }
+    if (-not (Test-Path -LiteralPath $templateIdentityScript)) { throw "E_TEMPLATE_IDENTITY_MISSING：缺少模板身份校验脚本：$templateIdentityScript" }
 
     if ($NoUi) {
         Set-RunProgress -Stage '读取 Sheet 列表' -Detail '正在读取 Excel 中可处理的可见 Sheet。'
@@ -2458,13 +2626,59 @@ try {
     # scripts. This prevents a first run from converting unrelated designs.
     $profileJson = $selectedProfile | ConvertTo-Json -Depth 8 -Compress
 
-    Set-RunProgress -Stage '启动 Photoshop' -Detail '数据预检通过，已连接 Photoshop，准备打开模板。'
+    # A supplied sidecar is a strict approval contract and must be validated
+    # before Photoshop opens. A missing sidecar is different: deterministic
+    # legacy templates first get a task-copy preparation, then the copy gets
+    # its own SHA-256 sidecar and is validated before any export can begin.
+    $sourcePsdPath = $psdPath
+    Set-RunProgress -Stage '模板身份校验' -Detail '正在校验 PSD 身份；首次导入的可确定旧版模板会先在副本上自动标准化。'
+    $identityCheck = Test-TemplateIdentity -Python $python -TemplatePath $sourcePsdPath -ProfileId $profileId -VariantId $variantId
+    $identityMissing = -not $identityCheck.Passed -and $identityCheck.Detail -match 'E_TEMPLATE_IDENTITY_MISSING'
+    if (-not $identityCheck.Passed -and -not $identityMissing) {
+        throw "E_TEMPLATE_IDENTITY_MISMATCH：PSD 模板身份未通过。$($identityCheck.Detail)"
+    }
+    if ($identityCheck.Passed) {
+        Add-Log "PSD 模板身份校验通过：$($identityCheck.Detail)"
+    } else {
+        Add-Log "PSD 尚无身份文件；将只在可确定映射通过后，为自动生成的副本建立身份文件：$($identityCheck.Detail)"
+    }
+    if ($identityMissing -and $profileId -ne 'legacy-v1') {
+        throw "E_TEMPLATE_IDENTITY_MISSING：当前渠道 PSD 缺少批准身份文件，不能自动信任。请使用对应批准 PSD 与 .template.json sidecar。"
+    }
+    $preparedTemplatePathsBefore = @(Get-PreparedTemplatePaths -TemplatePath $sourcePsdPath)
+
+    Set-RunProgress -Stage '启动 Photoshop' -Detail '数据预检通过，正在连接 Photoshop 并准备打开模板。'
     $photoshop = Start-Photoshop
-    $preparedPsdPath = Resolve-TemplateForTask -Application $photoshop -TemplatePath $psdPath
-    if ($preparedPsdPath -ne $psdPath) {
+    $preparedPsdPath = Resolve-TemplateForTask -Application $photoshop -TemplatePath $sourcePsdPath -AllowExistingPreparedSibling:(-not $identityMissing) -ForceFreshCopy:$identityMissing
+    $preparedCopyIsSeparate = [System.IO.Path]::GetFullPath($preparedPsdPath) -ne [System.IO.Path]::GetFullPath($sourcePsdPath)
+    $preparedCopyWasPresentBefore = $preparedCopyIsSeparate -and (Test-PreparedTemplateWasPresent -TemplatePath $preparedPsdPath -ExistingPaths $preparedTemplatePathsBefore)
+    $preparedCopyCreatedThisRun = $preparedCopyIsSeparate -and -not $preparedCopyWasPresentBefore
+    if ($preparedCopyIsSeparate) {
         $psdPath = $preparedPsdPath
         $script:CurrentPsdPath = $psdPath
         Add-Log "本次任务将使用自动生成的模板副本：$psdPath"
+    }
+    if ($identityMissing) {
+        if (-not $preparedCopyCreatedThisRun) {
+            throw "E_TEMPLATE_IDENTITY_MISSING：首次导入的京东旧版 PSD 必须在本次任务生成新的独立标准副本；不会为历史副本或原 PSD 自动签发身份文件。请检查模板字段唯一性后重试。"
+        }
+        Write-PreparedTemplateIdentity -Python $python -TemplatePath $psdPath -SourcePsdPath $sourcePsdPath -ProfileId $profileId -VariantId $variantId
+    } else {
+        $preparedIdentity = Test-TemplateIdentity -Python $python -TemplatePath $psdPath -ProfileId $profileId -VariantId $variantId
+        if ($preparedCopyIsSeparate) {
+            if ($preparedCopyWasPresentBefore) {
+                if (-not $preparedIdentity.Passed) {
+                    throw "E_TEMPLATE_IDENTITY_MISMATCH：业务方提供的模板副本未通过身份校验。$($preparedIdentity.Detail)"
+                }
+                Add-Log '业务方提供的模板副本身份校验通过，本次不会改写其身份文件。'
+            } else {
+                # The deterministic preparation created fresh bytes in this task,
+                # so the new copy gets a fresh sidecar and is immediately rechecked.
+                Write-PreparedTemplateIdentity -Python $python -TemplatePath $psdPath -SourcePsdPath $sourcePsdPath -ProfileId $profileId -VariantId $variantId
+            }
+        } elseif (-not $preparedIdentity.Passed) {
+            throw "E_TEMPLATE_IDENTITY_MISMATCH：实际执行 PSD 模板身份未通过。$($preparedIdentity.Detail)"
+        }
     }
     $taskInfo = @(
         '电商主图套版任务信息',
@@ -2573,14 +2787,15 @@ try {
     }
     Write-EntryFailureReport -ErrorSummary $message -Suggestion '错误已经写入工具任务记录；需要排查时，请提供任务文件夹中的任务记录，或用户目录下的工具任务记录。'
     Write-TaskHistory -Status '失败' -Message $message
-    if (-not $NoUi -and $_.Exception.Message -match 'E_(PROFILE_[A-Z_]+|CONFIG_MISMATCH|VAR_[A-Z_]+|SIZE_MISMATCH)') {
-        $errorCode = $Matches[0]
-        [void][System.Windows.Forms.MessageBox]::Show(
-            "本次任务未开始：表格、渠道或模板配置未通过检查。`r`n错误码：$errorCode`r`n详情已写入工具任务记录。",
-            '任务未开始',
-            [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Warning
-        )
+    if (-not $NoUi) {
+        if (Show-TaskFailureDialog -ErrorSummary $message) {
+            try {
+                New-Item -Path $startupDiagnosticDir -ItemType Directory -Force | Out-Null
+                Set-Content -LiteralPath $uiFailureMarker -Value (Get-Date).ToString('yyyy-MM-dd HH:mm:ss') -Encoding ASCII
+            } catch {
+                Add-Log "写入失败提示窗口标记失败：$($_.Exception.Message)"
+            }
+        }
     }
     exit 1
 }
