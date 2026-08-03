@@ -1,0 +1,44 @@
+"""Regression coverage for deterministic JD legacy PSD preparation."""
+from __future__ import annotations
+
+import json
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPT = ROOT / "L0_Windows命令行版" / "_internal" / "template_prepare.jsx"
+RUNNER = ROOT / "L0_Windows命令行版" / "_internal" / "L0_Run.ps1"
+BATCH = ROOT / "L0_Windows命令行版" / "_internal" / "batch_template.jsx"
+PROFILES = ROOT / "L0_Windows命令行版" / "_internal" / "channel_profiles.json"
+
+
+class LegacyTemplatePreparationTest(unittest.TestCase):
+    def test_known_legacy_aliases_are_preparable(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8-sig")
+
+        self.assertIn('"@时间": "@活动时间"', source)
+        self.assertIn('"!堆图": true', source)
+        self.assertIn("function hasDeterministicLegacyMapping", source)
+        self.assertIn("已识别京东旧版模板的唯一字段映射", source)
+        self.assertIn("prepareLegacyPackageLayers(document)", source)
+
+        runner = RUNNER.read_text(encoding="utf-8-sig")
+        self.assertIn("$selectedProfile.profile_id -eq 'legacy-v1'", runner)
+        self.assertIn("$check.Status -eq 'NEEDS_PREP'", runner)
+
+        batch = BATCH.read_text(encoding="utf-8")
+        self.assertIn("function isOptionalProfileVariable", batch)
+        self.assertIn("isOptionalProfileVariable(profile, required)", batch)
+
+    def test_legacy_coupon_layers_are_optional_when_data_disables_coupon(self) -> None:
+        profile_doc = json.loads(PROFILES.read_text(encoding="utf-8-sig"))
+        profile = next(item for item in profile_doc["profiles"] if item["profile_id"] == "legacy-v1")
+
+        self.assertEqual(profile["optional_psd_variables"], ["券名", "折扣", "券门槛"])
+        required = {item["name"] for item in profile["required_psd_variables"]}
+        self.assertTrue(set(profile["optional_psd_variables"]).issubset(required))
+
+
+if __name__ == "__main__":
+    unittest.main()

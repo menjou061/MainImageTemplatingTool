@@ -2020,7 +2020,14 @@ function Resolve-TemplateForTask {
     if ($check.Status -ne 'NEEDS_PREP') {
         throw "PSD 模板检测失败：$($check.Message)"
     }
-    $canAutoPrepare = $selectedProfile -and $selectedProfile.template_bindings
+    # Deterministic legacy aliases (for example @时间 and !堆图) are
+    # validated by template_prepare.jsx before reaching this branch. They are
+    # safe to prepare in headless regression runs just like explicit profile
+    # bindings; ambiguous PSDs still fail the earlier check.
+    $canAutoPrepare = $selectedProfile -and (
+        $selectedProfile.template_bindings -or
+        ($selectedProfile.profile_id -eq 'legacy-v1' -and $check.Status -eq 'NEEDS_PREP')
+    )
     if ($NoUi -and -not $canAutoPrepare) {
         throw "PSD 模板未完成智能化改造：$($check.Message)"
     }
