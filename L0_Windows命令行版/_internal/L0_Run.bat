@@ -32,6 +32,16 @@ if not exist "%PS_SCRIPT%" (
   exit /b 1
 )
 
+rem Hide both the runner and its parent launcher consoles unless diagnostics
+rem explicitly requested a visible console.
+if /I not "%L0_SHOW_CONSOLE%"=="1" if exist "%INTERNAL_DIR%hide_console.ps1" (
+  set "HIDE_PS_EXE="
+  if defined PROCESSOR_ARCHITEW6432 if exist "%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" set "HIDE_PS_EXE=%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
+  if not defined HIDE_PS_EXE if exist "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" set "HIDE_PS_EXE=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
+  if defined HIDE_PS_EXE "%HIDE_PS_EXE%" -NoLogo -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%INTERNAL_DIR%hide_console.ps1" >nul 2>&1
+)
+
+call :RESOLVE_POWERSHELL
 if not defined PS_EXE (
   call :WRITE_FAILURE "powershell" "Windows PowerShell 5.1 executable was not found"
   call :SHOW_FALLBACK_FAILURE

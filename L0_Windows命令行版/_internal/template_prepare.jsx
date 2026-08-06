@@ -36,6 +36,17 @@ function trimText(value) {
     return String(value == null ? "" : value).replace(/^\s+|\s+$/g, "");
 }
 
+function isBlank(value) {
+    return trimText(value) === "";
+}
+
+function asNameList(value) {
+    if (value == null || value === "") {
+        return [];
+    }
+    return typeof value === "string" ? [value] : value;
+}
+
 function addAllLayers(container, items) {
     for (var index = 0; index < container.layers.length; index++) {
         var layer = container.layers[index];
@@ -135,12 +146,103 @@ function findNamedLayersWithin(container, name, layerIndex) {
     return matches;
 }
 
+function normalizeBindingKey(value) {
+    var text = trimText(value);
+    while (text.charAt(0) === "@" || text.charAt(0) === "!" || text.charAt(0) === "#") {
+        text = text.substring(1);
+    }
+    return text.replace(/[\s_\-:\/\\（）()【】\[\]{}<>]/g, "").toLowerCase();
+}
+
+function listContains(values, value) {
+    for (var index = 0; index < values.length; index++) {
+        if (String(values[index]) === String(value)) { return true; }
+    }
+    return false;
+}
+
+function profileBindingNames(key) {
+    var names = [String(key)];
+    var normalized = normalizeBindingKey(key);
+    if (CHANNEL_PROFILE && CHANNEL_PROFILE.fields) {
+        for (var fieldIndex = 0; fieldIndex < CHANNEL_PROFILE.fields.length; fieldIndex++) {
+            var field = CHANNEL_PROFILE.fields[fieldIndex];
+            var candidates = [field.field_id, field.label, field.output_key];
+            var aliases = field.aliases || [];
+            for (var aliasIndex = 0; aliasIndex < aliases.length; aliasIndex++) {
+                candidates.push(aliases[aliasIndex]);
+            }
+            var matched = false;
+            for (var candidateIndex = 0; candidateIndex < candidates.length; candidateIndex++) {
+                if (!isBlank(candidates[candidateIndex]) && normalizeBindingKey(candidates[candidateIndex]) === normalized) {
+                    matched = true;
+                    break;
+                }
+            }
+            if (matched) {
+                for (var fieldCandidateIndex = 0; fieldCandidateIndex < candidates.length; fieldCandidateIndex++) {
+                    if (candidates[fieldCandidateIndex] && !listContains(names, String(candidates[fieldCandidateIndex]))) {
+                        names.push(String(candidates[fieldCandidateIndex]));
+                    }
+                }
+                break;
+            }
+        }
+    }
+    if (CHANNEL_PROFILE && CHANNEL_PROFILE.mapping) {
+        for (var source in CHANNEL_PROFILE.mapping) {
+            if (!CHANNEL_PROFILE.mapping.hasOwnProperty(source)) { continue; }
+            if (normalizeBindingKey(CHANNEL_PROFILE.mapping[source]) === normalized && !listContains(names, String(source))) {
+                names.push(String(source));
+            }
+        }
+    }
+    return names;
+}
+
+function findBindingLayers(document, key, type, requirePrefix) {
+    var normalizedNames = [];
+    var names = profileBindingNames(key);
+    for (var nameIndex = 0; nameIndex < names.length; nameIndex++) {
+        var normalizedName = normalizeBindingKey(names[nameIndex]);
+        if (!listContains(normalizedNames, normalizedName)) {
+            normalizedNames.push(normalizedName);
+        }
+    }
+    var all = [];
+    var matches = [];
+    addAllLayers(document, all);
+    for (var index = 0; index < all.length; index++) {
+        var layer = all[index];
+        if (type === "text" && !isTextLayer(layer)) { continue; }
+        if (type === "smart_object" && !isSmartObject(layer)) { continue; }
+        if (requirePrefix && ((type === "text" && layer.name.charAt(0) !== "@") ||
+            (type === "smart_object" && layer.name.charAt(0) !== "!"))) {
+            continue;
+        }
+        if (listContains(normalizedNames, normalizeBindingKey(layer.name))) {
+            matches.push(layer);
+        }
+    }
+    return matches;
+}
+
 function usesPhotoshopVariables() {
     return !!(CHANNEL_PROFILE && CHANNEL_PROFILE.execution_mode === "photoshop_variables");
 }
 
 function isHygieneRecordProfile() {
-    return !!(CHANNEL_PROFILE && CHANNEL_PROFILE.profile_id === "hygiene-tmall-v1.2");
+    return !!(CHANNEL_PROFILE && (
+        CHANNEL_PROFILE.layout === "record_rows" || CHANNEL_PROFILE.profile_id === "hygiene-tmall-v1.2"
+    ));
+}
+
+function usesStaticProductArt() {
+    return !!(CHANNEL_PROFILE && CHANNEL_PROFILE.static_product_art);
+}
+
+function usesStaticSupportArt() {
+    return !!(CHANNEL_PROFILE && (CHANNEL_PROFILE.static_support_art || CHANNEL_PROFILE.static_product_art));
 }
 
 function descendants(container, output) {
@@ -183,15 +285,13 @@ function findDirectGroup(container, name) {
     return null;
 }
 
-function findDirectGroupsByTrimmedName(container, name) {
-    var matches = [];
+function findDirectLayer(container, name) {
     for (var index = 0; index < container.layers.length; index++) {
-        var layer = container.layers[index];
-        if (layer.typename === "LayerSet" && trimText(layer.name) === name) {
-            matches.push(layer);
+        if (container.layers[index].name === name) {
+            return container.layers[index];
         }
     }
-    return matches;
+    return null;
 }
 
 function textLayersWithin(container) {
@@ -244,24 +344,28 @@ function sortLayersByVisualPosition(layers) {
 function hygieneLayoutGroupNames() {
     var configured = CHANNEL_PROFILE && CHANNEL_PROFILE.record_layout && CHANNEL_PROFILE.record_layout.groups;
     var active = CHANNEL_PROFILE && CHANNEL_PROFILE.active_layout_groups;
-    if (active && active.length > 0) {
+    active = asNameList(active);
+    if (active.length > 0) {
         return active;
     }
-    return configured || [];
+    return asNameList(configured);
 }
 
-function hygieneGiftSwitchNames() {
-    var configured = CHANNEL_PROFILE && CHANNEL_PROFILE.record_layout && CHANNEL_PROFILE.record_layout.gift_switches;
-    return configured && configured.length ? configured : ["赠品顶部", "赠品区域"];
-}
-
-function hygieneGiftSlotCount() {
-    var configured = CHANNEL_PROFILE && CHANNEL_PROFILE.record_layout && Number(CHANNEL_PROFILE.record_layout.gift_slots);
-    return configured > 0 ? configured : 3;
+function findHygieneLayoutLayers(document, name, layerIndex) {
+    if (!usesStaticProductArt()) {
+        return findNamedLayers(document, name, layerIndex);
+    }
+    var matches = [];
+    for (var index = 0; index < document.layers.length; index++) {
+        if (document.layers[index].name === name) {
+            matches.push(document.layers[index]);
+        }
+    }
+    return matches;
 }
 
 function inactiveHygieneLayouts(document, layerIndex) {
-    var configured = CHANNEL_PROFILE && CHANNEL_PROFILE.record_layout && CHANNEL_PROFILE.record_layout.groups;
+    var configured = asNameList(CHANNEL_PROFILE && CHANNEL_PROFILE.record_layout && CHANNEL_PROFILE.record_layout.groups);
     var active = hygieneLayoutGroupNames();
     var activeNames = {};
     var inactive = [];
@@ -273,10 +377,8 @@ function inactiveHygieneLayouts(document, layerIndex) {
     }
     for (var configuredIndex = 0; configuredIndex < configured.length; configuredIndex++) {
         var layoutName = configured[configuredIndex];
-        if (activeNames[layoutName]) {
-            continue;
-        }
-        var matches = findNamedLayers(document, layoutName, layerIndex);
+        if (activeNames[layoutName]) { continue; }
+        var matches = findHygieneLayoutLayers(document, layoutName, layerIndex);
         for (var matchIndex = 0; matchIndex < matches.length; matchIndex++) {
             if (matches[matchIndex].typename === "LayerSet") {
                 inactive.push({ name: layoutName, layer: matches[matchIndex] });
@@ -288,27 +390,52 @@ function inactiveHygieneLayouts(document, layerIndex) {
 
 function hygieneProblems(document, layerIndex) {
     var expected = [];
-    var required = CHANNEL_PROFILE && CHANNEL_PROFILE.required_psd_variables || [];
-    for (var requiredIndex = 0; requiredIndex < required.length; requiredIndex++) {
-        expected.push((required[requiredIndex].type === "text" ? "@" : "!") + required[requiredIndex].name);
+    if (usesStaticSupportArt() && CHANNEL_PROFILE.required_psd_variables) {
+        for (var requiredIndex = 0; requiredIndex < CHANNEL_PROFILE.required_psd_variables.length; requiredIndex++) {
+            var required = CHANNEL_PROFILE.required_psd_variables[requiredIndex];
+            expected.push((required.type === "text" ? "@" : "!") + required.name);
+        }
+    } else {
+        if (CHANNEL_PROFILE && CHANNEL_PROFILE.required_psd_variables) {
+            for (var dynamicRequiredIndex = 0; dynamicRequiredIndex < CHANNEL_PROFILE.required_psd_variables.length; dynamicRequiredIndex++) {
+                var dynamicRequired = CHANNEL_PROFILE.required_psd_variables[dynamicRequiredIndex];
+                if (isOptionalProfileVariable(dynamicRequired)) {
+                    continue;
+                }
+                expected.push((dynamicRequired.type === "text" ? "@" : "!") + dynamicRequired.name);
+            }
+        } else {
+            expected = ["!商品图", "@卖点", "@备注", "@片数套", "@片数数量", "@到手标签", "@到手", "@价格活动价", "@赠品文案1", "@赠品文案2", "@赠品文案3", "!赠品图1", "!赠品图2", "!赠品图3"];
+        }
     }
-    var configuredSwitches = hygieneGiftSwitchNames();
-    var expectedGroups = [];
-    for (var switchNameIndex = 0; switchNameIndex < configuredSwitches.length; switchNameIndex++) {
-        expectedGroups.push("#" + configuredSwitches[switchNameIndex]);
-    }
+    // The current three-column member master keeps all table-driven gifts in
+    // the bottom strip. A top gift group remains supported for older masters,
+    // but it is optional and must not make a valid bottom-gift template fail.
+    var giftFieldsAreOptional = isOptionalProfileVariable({ name: "赠品图1" }) &&
+        isOptionalProfileVariable({ name: "赠品文案1" });
+    var expectedGroups = usesStaticSupportArt() || giftFieldsAreOptional ? [] : ["#赠品区域"];
     var problems = [];
     var configured = hygieneLayoutGroupNames();
     for (var layoutIndex = 0; configured && layoutIndex < configured.length; layoutIndex++) {
-        var layoutMatches = findNamedLayers(document, configured[layoutIndex], layerIndex);
+        var layoutMatches = findHygieneLayoutLayers(document, configured[layoutIndex], layerIndex);
         if (layoutMatches.length !== 1 || layoutMatches[0].typename !== "LayerSet") {
             problems.push("E_CONFIG_MISMATCH: 版式组 " + configured[layoutIndex] + " 缺失、重复或不是图层组");
             continue;
         }
         var layout = layoutMatches[0];
         for (var index = 0; index < expected.length; index++) {
-            if (findNamedLayersWithin(layout, expected[index], layerIndex).length === 0) {
+            var boundLayers = findNamedLayersWithin(layout, expected[index], layerIndex);
+            if (boundLayers.length === 0) {
                 problems.push("E_VAR_UNBOUND: " + configured[layoutIndex] + "/" + expected[index]);
+                continue;
+            }
+            for (var boundIndex = 0; boundIndex < boundLayers.length; boundIndex++) {
+                var expectsText = expected[index].charAt(0) === "@";
+                if ((expectsText && !isTextLayer(boundLayers[boundIndex])) ||
+                    (!expectsText && !isSmartObject(boundLayers[boundIndex]))) {
+                    problems.push("E_VAR_TYPE_MISMATCH: " + configured[layoutIndex] + "/" + expected[index]);
+                    break;
+                }
             }
         }
         for (var groupIndex = 0; groupIndex < expectedGroups.length; groupIndex++) {
@@ -333,25 +460,13 @@ function hygieneProblems(document, layerIndex) {
 
 function hygieneStructureProblems(document, layerIndex) {
     var problems = [];
+    if (usesStaticSupportArt()) { return problems; }
     var groups = hygieneLayoutGroupNames();
     if (!groups) { return problems; }
     for (var layoutIndex = 0; layoutIndex < groups.length; layoutIndex++) {
-        var layouts = findNamedLayers(document, groups[layoutIndex], layerIndex);
+        var layouts = findHygieneLayoutLayers(document, groups[layoutIndex], layerIndex);
         if (layouts.length !== 1 || layouts[0].typename !== "LayerSet") { continue; }
         var layout = layouts[0];
-        if (hygieneGiftSlotCount() === 2) {
-            var switchNames = hygieneGiftSwitchNames();
-            for (var switchIndex = 0; switchIndex < switchNames.length; switchIndex++) {
-                var card = findFirstGroup(layout, "#" + switchNames[switchIndex], layerIndex);
-                var slotName = "!赠品图" + (switchIndex + 1);
-                // A business card can retain decorative smart objects. Only
-                // the explicitly bound material field controls replacement.
-                if (card && findNamedLayersWithin(card, slotName, layerIndex).length !== 1) {
-                    problems.push("E_GIFT_SLOT_MULTIPLE: " + groups[layoutIndex] + "/#" + switchNames[switchIndex]);
-                }
-            }
-            continue;
-        }
         var topGift = findDirectGroup(layout, "#赠品顶部");
         if (topGift && smartObjectLayersWithin(topGift).length !== 1) {
             problems.push("E_GIFT_SLOT_MULTIPLE: " + groups[layoutIndex] + "/#赠品顶部");
@@ -377,9 +492,6 @@ function hygieneStructureProblems(document, layerIndex) {
 }
 
 function hygieneSourceHasMultipleLayouts(document) {
-    // Business PSDs commonly keep one top-level group per SKU/layout. Do not
-    // attempt automatic mapping on that source; only a fully standardized
-    // sibling copy may pass the normal READY path above.
     var topLevelGroups = 0;
     for (var index = 0; index < document.layers.length; index++) {
         if (document.layers[index].typename === "LayerSet") {
@@ -387,6 +499,130 @@ function hygieneSourceHasMultipleLayouts(document) {
         }
     }
     return topLevelGroups > 1;
+}
+
+function staticMemberFieldNames() {
+    return ["@卖点", "@备注", "@片数套", "@片数数量", "@到手"];
+}
+
+function looksLikeStaticMemberSkuGroup(group, layerIndex) {
+    if (!group || group.typename !== "LayerSet") {
+        return false;
+    }
+    if (!findDirectGroup(group, "产品")) {
+        return false;
+    }
+    var fields = staticMemberFieldNames();
+    for (var index = 0; index < fields.length; index++) {
+        if (findNamedLayersWithin(group, fields[index], layerIndex).length === 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+function isStaticMemberFieldsTemplate(document, layerIndex) {
+    if (!isHygieneRecordProfile() || usesStaticProductArt()) {
+        return false;
+    }
+    var configured = hygieneLayoutGroupNames();
+    for (var configuredIndex = 0; configured && configuredIndex < configured.length; configuredIndex++) {
+        if (findHygieneLayoutLayers(document, configured[configuredIndex], layerIndex).length > 0) {
+            return false;
+        }
+    }
+    var matchingGroups = 0;
+    for (var index = 0; index < document.layers.length; index++) {
+        var layer = document.layers[index];
+        if (looksLikeStaticMemberSkuGroup(layer, layerIndex)) {
+            matchingGroups++;
+        }
+    }
+    return matchingGroups >= 2;
+}
+
+function findStaticMemberBaseGroup(document, layerIndex) {
+    var preferredNames = ["5QDAC618"];
+    for (var preferredIndex = 0; preferredIndex < preferredNames.length; preferredIndex++) {
+        var preferred = findDirectLayer(document, preferredNames[preferredIndex]);
+        if (looksLikeStaticMemberSkuGroup(preferred, layerIndex)) {
+            return preferred;
+        }
+    }
+    for (var index = 0; index < document.layers.length; index++) {
+        if (looksLikeStaticMemberSkuGroup(document.layers[index], layerIndex)) {
+            return document.layers[index];
+        }
+    }
+    return null;
+}
+
+function findStaticMemberIpSource(document) {
+    var preferredNames = ["6QSC6110+4QSC6205+2QSC6804+赠QXC8902"];
+    for (var preferredIndex = 0; preferredIndex < preferredNames.length; preferredIndex++) {
+        var preferred = findDirectLayer(document, preferredNames[preferredIndex]);
+        if (preferred && preferred.typename === "LayerSet" &&
+            findDirectLayer(preferred, "矢量智能对象") && findDirectLayer(preferred, "小马c标")) {
+            return preferred;
+        }
+    }
+    for (var index = 0; index < document.layers.length; index++) {
+        var layer = document.layers[index];
+        if (layer.typename !== "LayerSet") { continue; }
+        if (findDirectLayer(layer, "矢量智能对象") && findDirectLayer(layer, "小马c标")) {
+            return layer;
+        }
+    }
+    return null;
+}
+
+function convertMemberGroupToSmartObject(document, group, name) {
+    document.activeLayer = group;
+    executeAction(stringIDToTypeID("newPlacedLayer"), undefined, DialogModes.NO);
+    var result = document.activeLayer;
+    result.name = name;
+    return result;
+}
+
+function prepareStaticMemberFieldsAsDynamic(document, layerIndex) {
+    var base = findStaticMemberBaseGroup(document, layerIndex);
+    if (!base) {
+        throw new Error("固定 SKU 字段版中未找到可转换的三栏会员基础组");
+    }
+    var product = findDirectGroup(base, "产品");
+    if (!product) {
+        throw new Error("三栏会员基础组缺少产品组");
+    }
+    if (findNamedLayersWithin(base, "!商品图", layerIndex).length === 0) {
+        convertMemberGroupToSmartObject(document, product, "!商品图");
+    }
+
+    var ipSource = findStaticMemberIpSource(document);
+    if (ipSource && findDirectGroup(base, "#代言IP开关") === null) {
+        var ipImage = findDirectLayer(ipSource, "矢量智能对象");
+        var ipBadge = findDirectLayer(ipSource, "小马c标");
+        if (ipImage && ipImage.kind === LayerKind.SMARTOBJECT && ipBadge) {
+            var optionalIp = base.layerSets.add();
+            optionalIp.name = "#代言IP开关";
+            var copiedBadge = ipBadge.duplicate(optionalIp, ElementPlacement.PLACEATBEGINNING);
+            var copiedIp = ipImage.duplicate(optionalIp, ElementPlacement.PLACEATBEGINNING);
+            copiedIp.name = "!代言IP";
+            copiedBadge.name = "代言IP角标";
+            optionalIp.visible = false;
+        }
+    }
+
+    var dynamicLayoutNames = hygieneLayoutGroupNames();
+    if (!dynamicLayoutNames || dynamicLayoutNames.length === 0) {
+        throw new Error("卫品模板缺少可用版式组配置");
+    }
+    base.name = dynamicLayoutNames[0];
+    base.visible = true;
+    for (var index = document.layers.length - 1; index >= 0; index--) {
+        if (document.layers[index] !== base) {
+            document.layers[index].remove();
+        }
+    }
 }
 
 function expectedVariableKind(type) {
@@ -421,7 +657,7 @@ function templateProblems(document) {
         for (var profileIndex = 0; profileIndex < CHANNEL_PROFILE.required_psd_variables.length; profileIndex++) {
             var required = CHANNEL_PROFILE.required_psd_variables[profileIndex];
             var expectedName = (required.type === "text" ? "@" : "!") + required.name;
-            var bound = findNamedLayers(document, expectedName);
+            var bound = findBindingLayers(document, required.name, required.type, true);
             if (bound.length === 0) {
                 if (isOptionalProfileVariable(required)) {
                     continue;
@@ -509,7 +745,8 @@ function hasDeterministicLegacyMapping(document) {
     if (activityCount !== 1) {
         return false;
     }
-    return findProductCandidates(document).length === 1;
+    var productCandidates = findProductCandidates(document);
+    return productCandidates.length === 1;
 }
 
 function prepareLegacyPackageLayers(document) {
@@ -561,8 +798,8 @@ function profileBindingsAreUsable(document) {
     if (!CHANNEL_PROFILE || !CHANNEL_PROFILE.template_bindings) { return false; }
     for (var target in CHANNEL_PROFILE.template_bindings) {
         if (!CHANNEL_PROFILE.template_bindings.hasOwnProperty(target)) { continue; }
-        var sourceLayers = findNamedLayers(document, CHANNEL_PROFILE.template_bindings[target]);
         var required = profileRequiredVariable(target);
+        var sourceLayers = findBindingLayers(document, CHANNEL_PROFILE.template_bindings[target], null, false);
         if (!required || sourceLayers.length !== 1) { return false; }
         if (required.type === "text" && !isTextLayer(sourceLayers[0])) { return false; }
         if (required.type === "smart_object" && sourceLayers[0].typename !== "ArtLayer") { return false; }
@@ -574,8 +811,8 @@ function applyProfileBindings(document) {
     if (!CHANNEL_PROFILE || !CHANNEL_PROFILE.template_bindings) { return; }
     for (var target in CHANNEL_PROFILE.template_bindings) {
         if (!CHANNEL_PROFILE.template_bindings.hasOwnProperty(target)) { continue; }
-        var sourceLayers = findNamedLayers(document, CHANNEL_PROFILE.template_bindings[target]);
         var required = profileRequiredVariable(target);
+        var sourceLayers = findBindingLayers(document, CHANNEL_PROFILE.template_bindings[target], null, false);
         if (!required || sourceLayers.length !== 1) {
             throw new Error("模板图层映射失效：" + target);
         }
@@ -600,16 +837,25 @@ function inspectPreparation(document, layerIndex) {
                 "模板只包含本次任务版式。";
             return { status: "READY", message: "卫品天猫官旗 750 字段已通过体检；" + layoutMessage };
         }
+        if (usesStaticProductArt()) {
+            return {
+                status: "BLOCKED_PREP_REQUIRED",
+                message: "E_TEMPLATE_PREP_REQUIRED：固定商品组合模板的字段未标准化。请选择已确认的字段版 PSD；工具不会自动改造或覆盖设计原稿。"
+            };
+        }
+        if (isStaticMemberFieldsTemplate(document, scopedIndex)) {
+            return {
+                status: "NEEDS_PREP",
+                message: "已识别卫品三栏会员固定 SKU 字段版，将在副本中合并为单一动态版式并转换商品图智能对象。"
+            };
+        }
         if (inactiveLayouts.length > 0 || hygieneSourceHasMultipleLayouts(document)) {
             return {
                 status: "BLOCKED_PREP_REQUIRED",
-                message: "E_TEMPLATE_PREP_REQUIRED：模板包含多套版式且字段未标准化。请由业务方先生成并确认标准副本（文件名建议为原文件名_套版模板.psd），设计师不要在跑批时自动改造原始 PSD。"
+                message: "E_TEMPLATE_PREP_REQUIRED：模板包含多套版式且字段未标准化。请先生成并确认标准副本，跑批不会自动改造原始 PSD。"
             };
         }
-        return {
-            status: "NEEDS_PREP",
-            message: "已识别单版式卫品天猫官旗 750 模板，仅会在副本中建立本次任务字段映射。"
-        };
+        return { status: "NEEDS_PREP", message: "已识别单版式卫品天猫官旗 750 模板，仅会在副本中建立本次任务字段映射。" };
     }
     var existing = templateProblems(document);
     if (existing.length === 0) {
@@ -624,9 +870,10 @@ function inspectPreparation(document, layerIndex) {
         return { status: "NEEDS_PREP", message: "已识别当前渠道模板图层映射，将生成套版模板副本。" };
     }
 
-    // The approved JD legacy template uses stable field layers plus aliases
-    // such as @时间 and !堆图. Once each candidate is unique, preparing a
-    // task copy is deterministic even when visual groups are also present.
+    // The first JD template generation used stable visual groups plus a small
+    // set of legacy aliases (for example @时间 and !堆图). When all required
+    // content has exactly one candidate, that mapping is deterministic even if
+    // the PSD also contains 产品/时间 design groups.
     if (hasDeterministicLegacyMapping(document)) {
         return { status: "NEEDS_PREP", message: "已识别京东旧版模板的唯一字段映射，将生成套版模板副本。" };
     }
@@ -717,97 +964,7 @@ function normalizeGiftSlot(document, slotGroup, targetName) {
     if (sourceObjects.length === 0) {
         throw new Error("E_CONFIG_MISMATCH: " + targetName + " 槽位没有可替换素材");
     }
-    // A supplied gift path represents one finished gift composition. Some
-    // legacy PSDs build one card from several original product objects; turn
-    // that complete card into one smart object before replacement so the old
-    // objects cannot remain underneath or receive the same path repeatedly.
     convertToSmartObject(document, slotGroup, targetName);
-}
-
-function prepareHygieneTwoGiftCards(document, layoutGroup) {
-    var cards = findDirectGroupsByTrimmedName(layoutGroup, "赠品");
-    sortLayersByVisualPosition(cards);
-    if (cards.length !== 2) {
-        throw new Error("E_CONFIG_MISMATCH: 800 模板需要 2 个独立顶部赠品卡片，当前有 " + cards.length + " 个");
-    }
-    for (var cardIndex = 0; cardIndex < cards.length; cardIndex++) {
-        var card = cards[cardIndex];
-        var copy = [];
-        var text = textLayersWithin(card);
-        for (var textIndex = 0; textIndex < text.length; textIndex++) {
-            var textName = trimText(text[textIndex].name);
-            if (textName !== "买2赠" && textName !== "买就送") {
-                copy.push(text[textIndex]);
-            }
-        }
-        if (copy.length !== 1) {
-            throw new Error("E_CONFIG_MISMATCH: 800 赠品卡片 " + (cardIndex + 1) + " 需要 1 个动态文案图层，当前有 " + copy.length + " 个");
-        }
-        renameFirstText(copy, "赠品文案" + (cardIndex + 1));
-        var assetGroups = [];
-        for (var childIndex = 0; childIndex < card.layers.length; childIndex++) {
-            if (card.layers[childIndex].typename === "LayerSet") {
-                assetGroups.push(card.layers[childIndex]);
-            }
-        }
-        if (assetGroups.length !== 1) {
-            throw new Error("E_CONFIG_MISMATCH: 800 赠品卡片 " + (cardIndex + 1) + " 需要 1 个可替换素材组，当前有 " + assetGroups.length + " 个");
-        }
-        normalizeGiftSlot(document, assetGroups[0], "赠品图" + (cardIndex + 1));
-        card.name = "#赠品槽位" + (cardIndex + 1);
-    }
-}
-
-function prepareHygieneTopAndBottomGiftCards(document, layoutGroup, layoutIndex) {
-    var topCards = findDirectGroupsByTrimmedName(layoutGroup, "赠品");
-    if (topCards.length !== 1) {
-        throw new Error("E_CONFIG_MISMATCH: 750 模板需要 1 个顶部赠品卡片，当前有 " + topCards.length + " 个");
-    }
-    var topCard = topCards[0];
-    var topCopy = [];
-    var topText = textLayersWithin(topCard);
-    for (var topTextIndex = 0; topTextIndex < topText.length; topTextIndex++) {
-        if (trimText(topText[topTextIndex].name) !== "买就送") {
-            topCopy.push(topText[topTextIndex]);
-        }
-    }
-    if (topCopy.length !== 1) {
-        throw new Error("E_CONFIG_MISMATCH: 750 顶部赠品需要 1 个动态文案图层，当前有 " + topCopy.length + " 个");
-    }
-    renameFirstText(topCopy, "赠品文案1");
-    // The approved 750 PSD has decoration groups alongside the actual asset.
-    // Bind its named material group rather than treating every nested group as
-    // a candidate. This preserves the card frame and prevents stale material.
-    var topAsset = findDirectGroup(topCard, "组 381");
-    if (!topAsset) {
-        throw new Error("E_CONFIG_MISMATCH: 750 顶部赠品缺少素材组“组 381”");
-    }
-    normalizeGiftSlot(document, topAsset, "赠品图1");
-    topCard.name = "#赠品顶部";
-
-    var bottom = findFirstGroup(layoutGroup, "下帖", layoutIndex);
-    var bottomCard = bottom ? findDirectGroup(bottom, "赠品") : null;
-    if (!bottomCard) {
-        throw new Error("E_CONFIG_MISMATCH: 750 模板缺少下方组合赠品卡片");
-    }
-    var bottomCopy = [];
-    var bottomText = textLayersWithin(bottomCard);
-    for (var bottomTextIndex = 0; bottomTextIndex < bottomText.length; bottomTextIndex++) {
-        var bottomName = trimText(bottomText[bottomTextIndex].name);
-        if (bottomName !== "买2赠" && bottomName.charAt(0) !== "*") {
-            bottomCopy.push(bottomText[bottomTextIndex]);
-        }
-    }
-    if (bottomCopy.length !== 1) {
-        throw new Error("E_CONFIG_MISMATCH: 750 下方组合赠品需要 1 个动态文案图层，当前有 " + bottomCopy.length + " 个");
-    }
-    renameFirstText(bottomCopy, "赠品文案2");
-    var bottomAsset = findDirectGroup(bottomCard, "3QFC8202+QFC8802");
-    if (!bottomAsset) {
-        throw new Error("E_CONFIG_MISMATCH: 750 下方组合赠品缺少组合素材组“3QFC8202+QFC8802”");
-    }
-    normalizeGiftSlot(document, bottomAsset, "赠品图2");
-    bottomCard.name = "#赠品区域";
 }
 
 function prepareHygieneLayoutGroup(document, layoutGroup) {
@@ -874,46 +1031,18 @@ function prepareHygieneLayoutGroup(document, layoutGroup) {
     var badgeText = priceBadge ? textLayersWithin(priceBadge) : [];
     renameLargeSmallText(badgeText, "到手", "到手标签");
 
-    if (hygieneGiftSlotCount() === 2) {
-        var giftLayout = CHANNEL_PROFILE && CHANNEL_PROFILE.record_layout && CHANNEL_PROFILE.record_layout.gift_layout;
-        if (giftLayout === "two_top_cards") {
-            prepareHygieneTwoGiftCards(document, layoutGroup);
-        } else {
-            prepareHygieneTopAndBottomGiftCards(document, layoutGroup, layoutIndex);
-        }
-        var ambassador800 = findFirstGroup(layoutGroup, "代言人", layoutIndex);
-        if (ambassador800) {
-            var ambassadorLayers800 = artLayersWithin(ambassador800);
-            if (ambassadorLayers800.length > 0) {
-                renameGiftImage(document, ambassadorLayers800[0], "代言IP");
-                ambassador800.name = "#代言IP";
+    if (!usesStaticSupportArt()) {
+        var topGift = findDirectGroup(layoutGroup, "赠品");
+        var topGiftLayers = topGift ? smartObjectLayersWithin(topGift) : [];
+        if (topGiftLayers.length > 0) {
+            if (topGiftLayers.length !== 1) {
+                throw new Error("E_CONFIG_MISMATCH: 顶部赠品槽位必须只有一个智能对象，当前有 " + topGiftLayers.length + " 个");
             }
-        }
-        return;
-    }
-
-    var topGift = findDirectGroup(layoutGroup, "赠品");
-    var topGiftLayers = topGift ? smartObjectLayersWithin(topGift) : [];
-    if (topGiftLayers.length !== 1) {
-        throw new Error("E_CONFIG_MISMATCH: 顶部赠品槽位必须只有一个智能对象，当前有 " + topGiftLayers.length + " 个");
-    }
-    renameGiftImage(document, topGiftLayers[0], "赠品图1");
-    var topGiftText = textLayersWithin(topGift);
-    var topGiftCopy = [];
-    for (var topTextIndex = 0; topTextIndex < topGiftText.length; topTextIndex++) {
-        if (trimText(topGiftText[topTextIndex].name) !== "买就送") {
-            topGiftCopy.push(topGiftText[topTextIndex]);
+            renameGiftImage(document, topGiftLayers[0], "赠品图1");
+            topGift.name = "#赠品顶部";
         }
     }
-    if (topGiftCopy.length !== 1) {
-        throw new Error("E_CONFIG_MISMATCH: 顶部赠品需要一个独立动态文案图层，当前有 " + topGiftCopy.length + " 个");
-    }
-    renameFirstText(topGiftCopy, "赠品文案1");
-    // Photoshop 2026 drops a nested !赠品图1 name when its parent has
-    // the same #赠品图1 switch name. Keep the switch semantic while
-    // using a distinct internal group name so the binding survives save.
-    topGift.name = "#赠品顶部";
-    var bottomGift = bottom ? findDirectGroup(bottom, "赠品") : null;
+    var bottomGift = (!usesStaticSupportArt() && bottom) ? findDirectGroup(bottom, "赠品") : null;
     if (bottomGift) {
         var giftCopy = findFirstGroup(bottomGift, "文案 拷贝", layoutIndex);
         var giftText = giftCopy ? textLayersWithin(giftCopy) : [];
@@ -931,11 +1060,11 @@ function prepareHygieneLayoutGroup(document, layoutGroup) {
             }
         }
         sortLayersByVisualPosition(dynamicGiftText);
-        if (dynamicGiftText.length !== 2) {
-            throw new Error("E_CONFIG_MISMATCH: 下方赠品区域需要 2 个独立动态文案图层（对应赠品文案2-3），当前有 " + dynamicGiftText.length + " 个");
+        if (dynamicGiftText.length < 3) {
+            throw new Error("E_CONFIG_MISMATCH: 赠品区域需要 3 个独立动态文案图层（按上到下对应赠品文案1-3），当前仅找到 " + dynamicGiftText.length + " 个");
         }
-        for (var copyIndex = 0; copyIndex < dynamicGiftText.length; copyIndex++) {
-            dynamicGiftText[copyIndex].name = "@赠品文案" + (copyIndex + 2);
+        for (var copyIndex = 0; copyIndex < dynamicGiftText.length && copyIndex < 3; copyIndex++) {
+            dynamicGiftText[copyIndex].name = "@赠品文案" + (copyIndex + 1);
         }
         var giftAssets = findFirstGroup(bottomGift, "组 382", layoutIndex);
         var giftGroups = giftAssets ? [] : null;
@@ -945,7 +1074,6 @@ function prepareHygieneLayoutGroup(document, layoutGroup) {
                     giftGroups.push(giftAssets.layers[groupIndex]);
                 }
             }
-            sortLayersByVisualPosition(giftGroups);
             if (giftGroups.length > 0) {
                 normalizeGiftSlot(document, giftGroups[0], "赠品图2");
             }
@@ -959,17 +1087,21 @@ function prepareHygieneLayoutGroup(document, layoutGroup) {
         bottomGift.name = "#赠品区域";
     }
 
-    var ambassador = findFirstGroup(layoutGroup, "代言人", layoutIndex);
+    var ambassador = findFirstGroup(layoutGroup, "代言人");
     if (ambassador) {
         var ambassadorLayers = artLayersWithin(ambassador);
         if (ambassadorLayers.length > 0) {
             renameGiftImage(document, ambassadorLayers[0], "代言IP");
-            ambassador.name = "#代言IP";
+            ambassador.name = "#代言IP开关";
         }
     }
 }
 
 function prepareHygieneTemplate(document, layerIndex) {
+    if (isStaticMemberFieldsTemplate(document, layerIndex)) {
+        prepareStaticMemberFieldsAsDynamic(document, layerIndex);
+        return;
+    }
     var groups = hygieneLayoutGroupNames();
     if (!groups) { throw new Error("卫品模板缺少版式组配置"); }
     for (var index = 0; index < groups.length; index++) {
@@ -998,7 +1130,7 @@ function prepareTemplate(document, inspection, layerIndex) {
         if (hygieneIssues.length > 0) {
             throw new Error("卫品模板自动映射后仍不完整：" + hygieneIssues.join("；"));
         }
-        return { status: "PREPARED", message: "已为卫品天猫官旗 750 单版式模板建立字段映射副本。" };
+        return { status: "PREPARED", message: "已为卫品天猫官旗 750 模板建立图层映射。" };
     }
 
     var all = [];
@@ -1064,12 +1196,10 @@ function writePreparationReport(document, outputFile, message) {
     var lines = [
         "PSD 模板自动改造报告",
         "模板副本：" + outputFile.fsName,
-        "结果：" + message
+        "结果：" + message,
+        "",
+        "仅处理本次任务版式；图层清单已省略，大型模板请在 Photoshop 中查看图层面板。"
     ];
-    if (isHygieneRecordProfile()) {
-        lines.push("本次映射版式：" + hygieneLayoutGroupNames().join("、"));
-        lines.push("说明：仅处理本次任务版式的字段图层；多版式原始稿须先由业务方生成标准副本，原始 PSD 未修改。");
-    }
     report.encoding = "UTF8";
     if (report.open("w")) {
         report.write("\uFEFF" + lines.join("\n"));
@@ -1087,7 +1217,7 @@ function main() {
     var forceCopy = !!inputs.forceCopy;
     var layerIndex = buildLayerIndex(document);
     var inspection = inspectPreparation(document, layerIndex);
-    if (mode !== "prepare" || inspection.status === "AMBIGUOUS") {
+    if (mode !== "prepare" || inspection.status === "AMBIGUOUS" || inspection.status === "BLOCKED_PREP_REQUIRED") {
         return inspection.status + "|" + inspection.message + "|" + document.fullName.fsName;
     }
 

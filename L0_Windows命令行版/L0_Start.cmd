@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions DisableDelayedExpansion
-title Main Image Templating Tool 1.2
+title Main Image Templating Tool 1.4
 
 set "BASE=%~dp0"
 set "RUNNER=%BASE%_internal\L0_Run.bat"
@@ -24,6 +24,15 @@ if not exist "%RUNNER%" (
   >> "%STARTUP_DIR%\failure.txt" echo reason=missing _internal\L0_Run.bat
   call :SHOW_STARTUP_FAILURE
   exit /b 1
+)
+
+rem Hide the launcher console after the entrypoint has been validated. Set
+rem L0_SHOW_CONSOLE=1 before starting the tool to keep it visible for support.
+if /I not "%L0_SHOW_CONSOLE%"=="1" if exist "%BASE%_internal\hide_console.ps1" (
+  set "HIDE_PS_EXE="
+  if defined PROCESSOR_ARCHITEW6432 if exist "%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" set "HIDE_PS_EXE=%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
+  if not defined HIDE_PS_EXE if exist "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" set "HIDE_PS_EXE=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
+  if defined HIDE_PS_EXE "%HIDE_PS_EXE%" -NoLogo -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%BASE%_internal\hide_console.ps1" >nul 2>&1
 )
 
 set "L0_ENTRY_OK=1"

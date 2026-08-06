@@ -36,7 +36,11 @@ def main() -> None:
         ("价格2", "折"),
         ("卖点", "悬挂设计抽取方便，厨房清洁随手可取，日常囤货组合装，数量有限先到先得"),
         ("规格", "绒立方厨房抽纸2层180抽3提"),
-        ("堆图", str(product_image_path)),
+        # v1.3 canonical image field. The matching PSD uses !商品图.
+        ("商品图", str(product_image_path)),
+        # No @价格3 slot exists in this historic visual layout, so the task
+        # should export successfully while recording the dynamic-field warning.
+        ("价格3", "129"),
         ("DT17090-24旧", "无.png"),
         ("正式618新旧包装底", "无.png"),
         ("大尺寸", "无.png"),

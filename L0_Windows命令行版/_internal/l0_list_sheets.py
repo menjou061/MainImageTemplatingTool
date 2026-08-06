@@ -61,7 +61,7 @@ def first_row_headers(worksheet) -> list[str]:
     return [as_text(worksheet.cell(1, column).value) for column in range(1, max_column + 1)]
 
 
-def is_vertical_layout(worksheet) -> bool:
+def is_vertical_layout(worksheet, profile: dict[str, Any] | None = None) -> bool:
     """Detect the channel format with one row per product.
 
     The standard workbook is transposed: field names are in column A and
@@ -71,8 +71,8 @@ def is_vertical_layout(worksheet) -> bool:
     """
     max_row, max_column = ensure_dimensions(worksheet)
     headers = {as_text(worksheet.cell(1, column).value) for column in range(1, max_column + 1)}
-    if "文件名称" in headers and any(
-        header in headers for header in ("产品（精确到图片名）", "产品图路径", "图片目录路径")
+    if any(header in headers for header in ("文件名称", "商品文件名", "SKU", "变量名称")) and any(
+        header in headers for header in ("产品（精确到图片名）", "产品图路径", "图片目录路径", "产品", "商品图")
     ):
         return max_row >= 2 and max_column >= 2
     row_score = sum(
@@ -153,7 +153,7 @@ def list_products(
     profile = get_profile(profile_id, variant) if profile_id else None
     if HYGIENE_STANDARD_HEADERS.issubset(headers) or HYGIENE_RECORD_HEADERS.issubset(headers):
         product_values = visible_record_products(worksheet, headers, profile)
-    elif is_vertical_layout(worksheet):
+    elif is_vertical_layout(worksheet, profile):
         product_values = (
             worksheet.cell(row, 1).value
             for row in range(2, max_row + 1)

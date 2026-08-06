@@ -122,7 +122,7 @@ try {
     $channelWindow = Wait-DesktopWindow -Title '选择品类和渠道' -TimeoutSeconds 45
     Invoke-Control -Control (Get-Control -Root $channelWindow -Name '下一步' -ControlType ([System.Windows.Automation.ControlType]::Button))
 
-    $mainWindow = Wait-DesktopWindow -Title '电商主图套版工具 1.2' -TimeoutSeconds 45
+    $mainWindow = Wait-DesktopWindow -Title '电商主图套版工具 1.4' -TimeoutSeconds 45
     $startupHint = Get-Control -Root $mainWindow -Name '请先启动并登录 Photoshop，进入首页后再选择商品表格和 PSD 模板。' -ControlType ([System.Windows.Automation.ControlType]::Text)
     if (-not $startupHint) { throw '初始页缺少 Photoshop 启动提醒。' }
 
@@ -138,7 +138,7 @@ try {
     Invoke-Control -Control (Get-Control -Root $mainWindow -Name '开始生成' -ControlType ([System.Windows.Automation.ControlType]::Button))
     Start-Sleep -Seconds 1
 
-    $mainWindow = Get-DesktopWindow -Title '电商主图套版工具 1.2'
+    $mainWindow = Get-DesktopWindow -Title '电商主图套版工具 1.4'
     if (-not $mainWindow) { throw '点击开始生成后设置页被关闭。' }
     if ($process.HasExited) { throw "工具意外退出，退出码：$($process.ExitCode)" }
     $expectedMessage = if ($ExpectedState -eq 'NotRunning') {

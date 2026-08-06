@@ -19,17 +19,17 @@ class ChannelProfileTest(unittest.TestCase):
             ["变量名称", "SKU", "变量01", "变量02", "变量03", "变量04", "变量05", "变量06", "变量07", "图片目录路径", "变量08", "变量09"],
             profile,
         )
-        self.assertEqual(mapping["SKU"], "文件名称")
+        self.assertEqual(mapping["SKU"], "商品文件名")
         self.assertEqual(mapping["变量01"], "利益点1")
         self.assertEqual(mapping["变量03"], "预估到手价")
-        self.assertEqual(mapping["图片目录路径"], "产品")
+        self.assertEqual(mapping["图片目录路径"], "商品图")
         self.assertNotIn("变量08", mapping)
         self.assertNotIn("变量09", mapping)
         self.assertEqual(profile["execution_mode"], "legacy_layer_names")
         self.assertEqual(profile["variant_selection"], "sheet")
         self.assertEqual(profile["sheet"]["sku_header"], "变量名称")
         self.assertEqual(profile["required_psd_variables"][0], {"name": "利益点1", "type": "text"})
-        self.assertEqual(profile["required_psd_variables"][-1], {"name": "产品", "type": "smart_object"})
+        self.assertEqual(profile["required_psd_variables"][-1], {"name": "商品图", "type": "smart_object"})
 
     def test_schema_mismatch_is_rejected(self) -> None:
         profile = get_profile("tmall-positional-v1", require_enabled=False)
@@ -46,7 +46,7 @@ class ChannelProfileTest(unittest.TestCase):
         self.assertNotIn("export_size", tmall800)
         self.assertEqual(tmall750["sheet_name"], "现货-750")
         self.assertEqual(tmall800["sheet_name"], "现货-800")
-        self.assertEqual(tmall750["template_bindings"]["产品"], "DT17100-20")
+        self.assertEqual(tmall750["template_bindings"]["商品图"], "DT17100-20")
         self.assertEqual(get_variant_for_sheet(profile, "现货-800"), "main-800")
         self.assertEqual(get_variant_for_sheet(profile, "现货-750"), "main-750")
         with self.assertRaisesRegex(ProfileError, "E_PROFILE_SHEET_MISMATCH"):
@@ -77,7 +77,7 @@ class ChannelProfileTest(unittest.TestCase):
         ]
         mapping = map_vertical_headers(headers, profile)
         self.assertEqual(mapping["文件名称"], "商品文件名")
-        self.assertEqual(mapping["产品（精确到图片名）"], "产品")
+        self.assertEqual(mapping["产品（精确到图片名）"], "商品图")
         hengan750 = get_profile("hengan-lifestyle-v1", "main-750", require_enabled=False)
         hengan800 = get_profile("hengan-lifestyle-v1", "main-800", require_enabled=False)
         self.assertEqual(get_variant_for_sheet(profile, "750版新"), "main-750")
@@ -99,9 +99,8 @@ class ChannelProfileTest(unittest.TestCase):
         self.assertIn("输出文件名", profile["sheet"]["required_headers"])
         self.assertTrue(any("备注" in headers for headers in profile["sheet"]["required_header_sets"]))
         self.assertNotIn("价格优惠券", profile["record_required_fields"])
-        self.assertEqual(profile["record_layout"]["groups"], ["无代言人"])
-        self.assertEqual(profile["record_layout"]["gift_slots"], 2)
-        self.assertEqual(profile["record_layout"]["gift_layout"], "top_and_bottom_cards")
+        self.assertEqual(profile["record_layout"]["groups"], ["三栏会员"])
+        self.assertEqual(profile["record_layout"]["gift_slots"], 3)
         self.assertEqual(profile["variant_selection"], "sheet")
         self.assertNotIn("batch_variants", profile)
         self.assertEqual(get_variant_for_sheet(profile, "出图数据"), "main-750")
@@ -110,8 +109,7 @@ class ChannelProfileTest(unittest.TestCase):
         hygiene800 = get_profile("hygiene-tmall-v1.2", "main-800")
         self.assertEqual(hygiene800["target_size"], {"width": 750, "height": 750})
         self.assertEqual(hygiene800["output_label"], "800")
-        self.assertEqual(hygiene800["record_layout"]["gift_layout"], "two_top_cards")
-        self.assertEqual(hygiene800["record_layout"]["gift_switches"], ["赠品槽位1", "赠品槽位2"])
+        self.assertTrue(hygiene800["static_support_art"])
 
     def test_enabled_category_channel_combinations_are_complete_and_unique(self) -> None:
         enabled = [profile for profile in load_profiles().values() if profile["status"] == "enabled"]

@@ -2,18 +2,18 @@
 
 面向电商设计师的 Windows + Adobe Photoshop 批量套版工具。选择商品 Excel 和 PSD 模板后，工具会自动完成数据检查、素材替换，并同时导出 JPG 成品和可编辑 PSD。
 
-> 当前版本：**v1.2.0**。新手安装与使用教程见[飞书文档](https://pcnfsebpg8ae.feishu.cn/wiki/HE7JwtImKiaRhLkVNFwcakrmnxg)。
+> 当前版本：**v1.4.0**。安装、表格字段、PSD 图层和渠道标准文件见[飞书说明中心](https://pcnfsebpg8ae.feishu.cn/wiki/GNKXw8E1SipzcnkrrF9c0vOnnze)。
 
 ## 下载与安装
 
 1. 打开 [Releases](https://github.com/menjou061/MainImageTemplatingTool/releases/latest)。
-2. 下载对应版本的 `MainImageTemplatingTool_Windows_v1.2.0.zip`。
+2. 下载对应版本的 `MainImageTemplatingTool_Windows_v1.4.0.zip`。
 3. 把 ZIP 完整解压到本地文件夹，不要直接在压缩包里运行。
 4. 手动启动 Adobe Photoshop，完成登录并等待 Photoshop 首页显示。
 5. 保持 Photoshop 开启，再双击 `开始套版.cmd`。
 
 工具已内置 Python 运行环境，正常使用不需要另外安装 Python。
-安装包还包含 `示例文件/表格案例_618正式主图.xlsx`，首次使用可以复制这份案例表并替换商品数据和素材路径。
+标准 Excel 和 PSD 通过飞书说明中心按渠道一对一提供，不包含在工具 ZIP 内，避免设计师误用其他渠道模板。
 
 ## 使用流程
 
@@ -37,6 +37,8 @@
 
 如果双击 `开始套版.cmd` 后主界面完全没有出现，最早期启动日志保存在 `%LOCALAPPDATA%\MainImageTemplatingTool\startup`；进入主程序后的任务记录仍保存在 `%LOCALAPPDATA%\电商主图套版工具\任务记录`。
 
+正常启动时，入口 CMD 窗口会自动隐藏，只保留工具自己的设置、进度和完成窗口；需要开发排查时可在启动前设置 `L0_SHOW_CONSOLE=1` 保持窗口可见。
+
 ## 使用要求
 
 - Windows 10 x64 或更高版本
@@ -49,7 +51,7 @@ v1.0 已在 Adobe Photoshop 2026（27.2）完成验证。其他 Windows 正式�
 ## 项目结构
 
 - `L0_Windows命令行版/`：Windows 交付程序及内置运行环境
-- `L0_Windows命令行版/示例文件/`：可直接复制使用的原案例 Excel
+- `标准模板归档/v1.3_动态字段标准/`：四个渠道的基准 Excel、PSD 和字段清单，仅用于飞书渠道附件交付
 - `tests/`：Windows 界面回归与截图脚本
 - `M1_Windows验证包/`：早期 Windows/Photoshop 最小验证工具
 - `电商主图批量套版工具_PRD_v*.docx`：产品需求文档历史版本
@@ -58,6 +60,8 @@ v1.0 已在 Adobe Photoshop 2026（27.2）完成验证。其他 Windows 正式�
 
 | 版本 | 说明 |
 |---|---|
+| **v1.4.0** | 在 v1.3 动态字段匹配基础上完成全渠道 Windows Photoshop 真实数据复验；新增字段可直接按同名 `@文本` / `!图片` 匹配，`#显示组`按组内字段是否有值显示；图片等比适配原展示框，标准 Excel/PSD 改由飞书按渠道一对一维护。 |
+| **v1.3.0** | 四渠道改为 canonical-first 动态字段绑定；统一 `商品图` / `!商品图`，兼容旧字段别名，并提供标准 Excel 与 PSD 模板。 |
 | **v1.2.0** | 新增独立品类/渠道选择、七个批准组合和卫品+天猫官旗 750/800 标准表流程；模板身份、任务级问题短提示，行级问题仅记录 |
 | **v1.1.0** | 支持按运营 Sheet 选择渠道规格；750/800 改为独立单次任务，按规格隔离输出和任务记录；保留 v1.0 京东自营流程 |
 | **v1.0.0** | 首个设计师团队交付版：四步套版流程、商品勾选、桌面默认保存、JPG/PSD/任务记录分类、异常自动跳过与任务日志、Windows 界面回归验证 |

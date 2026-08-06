@@ -10,17 +10,16 @@ SCRIPT = ROOT / "L0_Windows命令行版" / "_internal" / "template_prepare.jsx"
 
 
 class HygieneTemplatePreparationTest(unittest.TestCase):
-    def test_750_gift_slots_target_the_approved_cards_in_business_order(self) -> None:
+    def test_750_gift_slots_target_the_three_member_cards_in_business_order(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
 
-        start = source.index("function prepareHygieneTopAndBottomGiftCards")
-        end = source.index("function prepareHygieneLayoutGroup", start)
+        start = source.index("function prepareHygieneLayoutGroup")
+        end = source.index("function prepareHygieneTemplate", start)
         helper = source[start:end]
-        self.assertIn('findDirectGroup(topCard, "组 381")', helper)
-        self.assertIn('normalizeGiftSlot(document, topAsset, "赠品图1")', helper)
-        self.assertIn('findDirectGroup(bottomCard, "3QFC8202+QFC8802")', helper)
-        self.assertIn('normalizeGiftSlot(document, bottomAsset, "赠品图2")', helper)
-        self.assertNotIn('"赠品图3"', helper)
+        self.assertIn('renameGiftImage(document, topGiftLayers[0], "赠品图1")', helper)
+        self.assertIn('normalizeGiftSlot(document, giftGroups[0], "赠品图2")', helper)
+        self.assertIn('normalizeGiftSlot(document, giftGroups[1], "赠品图3")', helper)
+        self.assertIn('dynamicGiftText[copyIndex].name = "@赠品文案" + (copyIndex + 1)', helper)
 
     def test_750_preflight_checks_the_named_material_not_card_decorations(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
@@ -28,9 +27,8 @@ class HygieneTemplatePreparationTest(unittest.TestCase):
         start = source.index("function hygieneStructureProblems")
         end = source.index("function hygieneSourceHasMultipleLayouts", start)
         helper = source[start:end]
-        self.assertIn('var slotName = "!赠品图" + (switchIndex + 1)', helper)
-        self.assertIn("findNamedLayersWithin(card, slotName, layerIndex).length !== 1", helper)
-        self.assertNotIn("smartObjectLayersWithin(card).length !== 1", helper)
+        self.assertIn("var slotObjects = smartObjectLayersWithin(slotGroups[slotIndex]);", helper)
+        self.assertIn("if (slotObjects.length !== 1)", helper)
 
     def test_switch_groups_are_checked_with_their_hash_prefix(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
@@ -38,7 +36,7 @@ class HygieneTemplatePreparationTest(unittest.TestCase):
         start = source.index("function hygieneProblems")
         end = source.index("function hygieneStructureProblems", start)
         helper = source[start:end]
-        self.assertIn('expectedGroups.push("#" + configuredSwitches[switchNameIndex])', helper)
+        self.assertIn('var expectedGroups = usesStaticSupportArt() || giftFieldsAreOptional ? [] : ["#赠品区域"];', helper)
 
     def test_fixed_gift_button_and_disclaimer_are_not_bound_to_row_data(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
@@ -88,7 +86,7 @@ class HygieneTemplatePreparationTest(unittest.TestCase):
         self.assertIn('status: "BLOCKED_PREP_REQUIRED"', source)
         self.assertIn("E_TEMPLATE_PREP_REQUIRED", source)
         self.assertNotIn("function removeInactiveHygieneLayouts", source)
-        self.assertIn("多版式原始稿须先由业务方生成标准副本", source)
+        self.assertIn("请先生成并确认标准副本", source)
         blocked_return = source.index("if (result.status !== \"PREPARED\")")
         save = source.index("document.saveAs(outputFile")
         self.assertLess(blocked_return, save)

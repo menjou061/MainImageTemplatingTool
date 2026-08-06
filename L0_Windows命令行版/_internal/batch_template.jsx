@@ -6,10 +6,13 @@
  */
 
 var REPORT_NAME = "结果报告.csv";
-var PRODUCT_VERTICAL_OFFSET_PX = 32;
+// Keep the product inside the designer's smart-object frame.  The 94% inset
+// leaves the PSD safety margin visible while still filling the usable area.
+var PRODUCT_SAFE_SCALE = 0.94;
 var CONTINUE_WITH_PREFLIGHT_ISSUES = !!($.global.__BATCH_INPUTS__ && $.global.__BATCH_INPUTS__.continueWithPreflightIssues);
 var CHANNEL_PROFILE = ($.global.__BATCH_INPUTS__ && $.global.__BATCH_INPUTS__.profile) || null;
 var ACTIVE_LAYOUT_GROUP = null;
+var SWITCH_STATE = {};
 
 function trimText(value) {
     return String(value == null ? "" : value).replace(/^\s+|\s+$/g, "");
@@ -23,27 +26,154 @@ function isBlank(value) {
     return trimText(value) === "";
 }
 
+function asNameList(value) {
+    if (value == null || value === "") {
+        return [];
+    }
+    return typeof value === "string" ? [value] : value;
+}
+
 function isDisabledImageValue(value) {
     var normalized = trimText(value).toLowerCase();
     return normalized === "无" || normalized === "无.png" || normalized === "none" || normalized === "null";
 }
 
-function isOptionalProfileVariable(profile, required) {
-    if (!profile || !profile.optional_psd_variables) {
+function isOptionalProfileKey(key) {
+    if (!CHANNEL_PROFILE || !CHANNEL_PROFILE.optional_psd_variables) {
         return false;
     }
-    for (var index = 0; index < profile.optional_psd_variables.length; index++) {
-        if (String(profile.optional_psd_variables[index]) === String(required.name)) {
+    for (var index = 0; index < CHANNEL_PROFILE.optional_psd_variables.length; index++) {
+        if (String(CHANNEL_PROFILE.optional_psd_variables[index]) === String(key)) {
             return true;
         }
     }
     return false;
 }
 
-function isRequiredTextKey(key) {
+function dataFieldsOptional() {
+    return !!(CHANNEL_PROFILE && CHANNEL_PROFILE.data_fields_optional);
+}
+
+function isProfileTextKey(key) {
+    if (CHANNEL_PROFILE && CHANNEL_PROFILE.required_psd_variables) {
+        for (var index = 0; index < CHANNEL_PROFILE.required_psd_variables.length; index++) {
+            var required = CHANNEL_PROFILE.required_psd_variables[index];
+            if (required.type === "text" && String(required.name) === String(key)) {
+                return true;
+            }
+        }
+        return false;
+    }
     return key === "折扣" || key === "券名" || key === "券门槛" ||
         key === "活动时间" || key === "到手" || key === "价格1" ||
         key === "价格2" || key === "卖点" || key === "规格";
+}
+
+function normalizeBindingKey(value) {
+    var text = trimText(value);
+    while (text.charAt(0) === "@" || text.charAt(0) === "!" || text.charAt(0) === "#") {
+        text = text.substring(1);
+    }
+    return text.replace(/[\s_\-:\/\\（）()【】\[\]{}<>]/g, "").toLowerCase();
+}
+
+function pushUnique(values, value) {
+    if (isBlank(value)) { return; }
+    for (var index = 0; index < values.length; index++) {
+        if (String(values[index]) === String(value)) { return; }
+    }
+    values.push(String(value));
+}
+
+function profileFieldForKey(key) {
+    if (!CHANNEL_PROFILE || !CHANNEL_PROFILE.fields) { return null; }
+    var normalized = normalizeBindingKey(key);
+    for (var index = 0; index < CHANNEL_PROFILE.fields.length; index++) {
+        var field = CHANNEL_PROFILE.fields[index];
+        var aliases = field.aliases || [];
+        var candidates = [field.field_id, field.label, field.output_key];
+        for (var aliasIndex = 0; aliasIndex < aliases.length; aliasIndex++) {
+            candidates.push(aliases[aliasIndex]);
+        }
+        for (var candidateIndex = 0; candidateIndex < candidates.length; candidateIndex++) {
+            if (!isBlank(candidates[candidateIndex]) && normalizeBindingKey(candidates[candidateIndex]) === normalized) {
+                return field;
+            }
+        }
+    }
+    return null;
+}
+
+function isMainImageKey(key) {
+    var field = profileFieldForKey(key);
+    if (field && String(field.field_id) === "main_image") {
+        return true;
+    }
+    var normalized = normalizeBindingKey(key);
+    return normalized === "商品图" || normalized === "产品" ||
+        normalized === "产品图" || normalized === "堆图";
+}
+
+function bindingNames(key) {
+    var names = [];
+    pushUnique(names, key);
+    // Visibility groups use #字段名. Older tables commonly label the same
+    // control column 字段名开关, so expose the canonical group name as a
+    // generic compatibility alias rather than maintaining channel rules.
+    var textKey = trimText(key);
+    if (textKey.length > 2 && textKey.substring(textKey.length - 2) === "开关") {
+        pushUnique(names, textKey.substring(0, textKey.length - 2));
+    }
+    var field = profileFieldForKey(key);
+    if (field) {
+        pushUnique(names, field.field_id);
+        pushUnique(names, field.label);
+        pushUnique(names, field.output_key);
+        var aliases = field.aliases || [];
+        for (var index = 0; index < aliases.length; index++) {
+            pushUnique(names, aliases[index]);
+        }
+    }
+    if (CHANNEL_PROFILE && CHANNEL_PROFILE.mapping) {
+        for (var source in CHANNEL_PROFILE.mapping) {
+            if (!CHANNEL_PROFILE.mapping.hasOwnProperty(source)) { continue; }
+            if (normalizeBindingKey(CHANNEL_PROFILE.mapping[source]) === normalizeBindingKey(key)) {
+                pushUnique(names, source);
+            }
+        }
+    }
+    return names;
+}
+
+function resolveRecordKey(key, record) {
+    if (record && record.hasOwnProperty(key)) { return key; }
+    var names = bindingNames(key);
+    for (var index = 0; index < names.length; index++) {
+        if (record && record.hasOwnProperty(names[index])) {
+            return names[index];
+        }
+    }
+    var normalizedKey = normalizeBindingKey(key);
+    if (record) {
+        for (var recordKey in record) {
+            if (record.hasOwnProperty(recordKey) && normalizeBindingKey(recordKey) === normalizedKey) {
+                return recordKey;
+            }
+        }
+    }
+    return key;
+}
+
+function recordValue(record, key) {
+    var resolved = resolveRecordKey(key, record);
+    return record && record.hasOwnProperty(resolved) ? record[resolved] : "";
+}
+
+function isRequiredTextKey(key) {
+    if (isOptionalProfileKey(key) || dataFieldsOptional()) {
+        return false;
+    }
+    return isProfileTextKey(key);
 }
 
 function getBasename(value) {
@@ -216,6 +346,46 @@ function findMaterial(value, materialIndex) {
     return materialIndex ? (materialIndex[key] || null) : null;
 }
 
+var stagedMaterialFiles = {};
+
+function pathHash(value) {
+    var hash = 0;
+    var text = String(value == null ? "" : value);
+    for (var index = 0; index < text.length; index++) {
+        hash = ((hash * 31) + text.charCodeAt(index)) & 0x7fffffff;
+    }
+    return hash.toString(16);
+}
+
+function needsLocalMaterialStaging(file) {
+    if (!file) {
+        return false;
+    }
+    var path = String(file.fsName || file.fullName || file);
+    return path.indexOf("\\\\") === 0 || path.indexOf("//") === 0;
+}
+
+function stageMaterialForPhotoshop(file) {
+    if (!needsLocalMaterialStaging(file)) {
+        return file;
+    }
+    var sourcePath = String(file.fsName || file.fullName || file);
+    if (stagedMaterialFiles[sourcePath]) {
+        return stagedMaterialFiles[sourcePath];
+    }
+    var cacheFolder = new Folder(Folder.temp.fsName + "/l0_material_cache");
+    if (!cacheFolder.exists && !cacheFolder.create()) {
+        throw new Error("无法创建素材本地缓存目录：" + cacheFolder.fsName);
+    }
+    var baseName = getBasename(sourcePath);
+    var target = new File(cacheFolder.fsName + "/" + pathHash(sourcePath) + "_" + baseName);
+    if (!target.exists && !file.copy(target)) {
+        throw new Error("网络素材无法复制到 Photoshop 本地缓存：" + sourcePath);
+    }
+    stagedMaterialFiles[sourcePath] = target;
+    return target;
+}
+
 function isAbsoluteMaterialPath(value) {
     var text = trimText(value);
     if (text.length === 0) {
@@ -233,6 +403,12 @@ function isAbsoluteMaterialPath(value) {
 
 function addIssue(result, issue) {
     result.issues.push(issue);
+}
+
+function addDataPrecheckWarning(result, issue) {
+    result.preflightIssue = true;
+    addCode(result, "W_DATA_PRECHECK");
+    addIssue(result, issue + "；已按表格内容继续生成");
 }
 
 function addCode(result, code) {
@@ -280,6 +456,14 @@ function usesPhotoshopVariables(profile) {
     return !!(profile && profile.execution_mode === "photoshop_variables");
 }
 
+function usesStaticProductArt(profile) {
+    return !!(profile && profile.static_product_art);
+}
+
+function usesStaticSupportArt(profile) {
+    return !!(profile && (profile.static_support_art || profile.static_product_art));
+}
+
 function expectedVariableKind(type) {
     return type === "text" ? VariableKind.TEXT : VariableKind.PIXELREPLACEMENT;
 }
@@ -294,8 +478,21 @@ function findDocumentVariable(document, name) {
     return null;
 }
 
+function isOptionalProfileVariable(profile, required) {
+    if (!profile || !profile.optional_psd_variables) {
+        return false;
+    }
+    var requiredName = required && required.name;
+    for (var index = 0; index < profile.optional_psd_variables.length; index++) {
+        if (String(profile.optional_psd_variables[index]) === String(requiredName)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 function priceValidationError(record) {
-    if (CHANNEL_PROFILE && CHANNEL_PROFILE.layout === "record_rows") {
+    if (dataFieldsOptional() || (CHANNEL_PROFILE && CHANNEL_PROFILE.layout === "record_rows")) {
         return "";
     }
     var price1 = trimText(record["价格1"]);
@@ -320,12 +517,29 @@ function collectRecordLayoutMatches(container, configured, matches) {
     }
 }
 
+function collectProfileRecordLayoutMatches(container, configured, matches, profile) {
+    if (!usesStaticProductArt(profile)) {
+        collectRecordLayoutMatches(container, configured, matches);
+        return;
+    }
+    // A fixed product composition may contain nested groups with the same SKU
+    // name. Only direct document-level layout groups are selectable.
+    for (var layerIndex = 0; layerIndex < container.layers.length; layerIndex++) {
+        var layer = container.layers[layerIndex];
+        for (var groupIndex = 0; groupIndex < configured.length; groupIndex++) {
+            if (layer.name === configured[groupIndex]) {
+                matches[groupIndex].push(layer);
+            }
+        }
+    }
+}
+
 function selectRecordLayout(document, record) {
     if (!CHANNEL_PROFILE || CHANNEL_PROFILE.layout !== "record_rows") {
         ACTIVE_LAYOUT_GROUP = null;
         return;
     }
-    var configured = CHANNEL_PROFILE.record_layout && CHANNEL_PROFILE.record_layout.groups;
+    var configured = asNameList(CHANNEL_PROFILE.record_layout && CHANNEL_PROFILE.record_layout.groups);
     var selectedName = trimText(record["版式组"]);
     ACTIVE_LAYOUT_GROUP = null;
     if (!configured || configured.length === 0 || !selectedName) {
@@ -347,7 +561,7 @@ function selectRecordLayout(document, record) {
         throw new Error("E_CONFIG_MISMATCH: 版式组未在渠道配置中声明 " + selectedName);
     }
 
-    collectRecordLayoutMatches(document, configured, configuredMatches);
+    collectProfileRecordLayoutMatches(document, configured, configuredMatches, CHANNEL_PROFILE);
     var selectedMatches = configuredMatches[selectedIndex];
     if (selectedMatches.length === 0) {
         throw new Error("E_CONFIG_MISMATCH: 模板没有版式组 " + configured[selectedIndex]);
@@ -371,42 +585,92 @@ function selectRecordLayout(document, record) {
 }
 
 function applyPreflightIssue(record, result) {
-    var issue = trimText(record["预检异常"]);
-    if (isBlank(issue)) {
-        return;
+    var errors = trimText(record["预检异常"]);
+    var warnings = trimText(record["预检提醒"]);
+    if (!isBlank(errors)) {
+        result.preflightIssue = true;
+        addCode(result, "W_DATA_PRECHECK");
+        addIssue(result, "清洗预检异常：" + errors);
     }
-    result.preflightIssue = true;
-    addCode(result, "W_DATA_PRECHECK");
-    addIssue(result, "清洗预检：" + issue);
+    if (!isBlank(warnings)) {
+        result.preflightIssue = true;
+        addCode(result, "W_DATA_PRECHECK");
+        addIssue(result, "清洗预检提醒：" + warnings);
+    }
 }
 
 function addLayers(container, layerIndex) {
     for (var index = 0; index < container.layers.length; index++) {
         var layer = container.layers[index];
-        var name = layer.name;
-        if (startsWith(name, "@")) {
-            var textKey = name.substring(1);
-            if (!layerIndex.text[textKey]) {
-                layerIndex.text[textKey] = [];
-            }
-            layerIndex.text[textKey].push(layer);
-        } else if (startsWith(name, "!")) {
-            var imageKey = name.substring(1);
-            if (!layerIndex.image[imageKey]) {
-                layerIndex.image[imageKey] = [];
-            }
-            layerIndex.image[imageKey].push(layer);
-        } else if (startsWith(name, "#")) {
-            var switchKey = name.substring(1);
-            if (!layerIndex.switches[switchKey]) {
-                layerIndex.switches[switchKey] = [];
-            }
-            layerIndex.switches[switchKey].push(layer);
-        }
+        addLayerToIndex(layer, layerIndex);
         if (layer.typename === "LayerSet") {
             addLayers(layer, layerIndex);
         }
     }
+}
+
+function addLayerToIndex(layer, layerIndex) {
+    var name = layer.name;
+    if (startsWith(name, "@")) {
+        var textKey = name.substring(1);
+        if (!layerIndex.text[textKey]) {
+            layerIndex.text[textKey] = [];
+        }
+        layerIndex.text[textKey].push(layer);
+    } else if (startsWith(name, "!")) {
+        var imageKey = name.substring(1);
+        if (!layerIndex.image[imageKey]) {
+            layerIndex.image[imageKey] = [];
+        }
+        layerIndex.image[imageKey].push(layer);
+    } else if (startsWith(name, "#")) {
+        var switchKey = name.substring(1);
+        if (!layerIndex.switches[switchKey]) {
+            layerIndex.switches[switchKey] = [];
+        }
+        layerIndex.switches[switchKey].push(layer);
+    }
+}
+
+function isRecordLayoutGroup(layer) {
+    if (!CHANNEL_PROFILE || CHANNEL_PROFILE.layout !== "record_rows" || layer.typename !== "LayerSet") {
+        return false;
+    }
+    var configured = asNameList(CHANNEL_PROFILE.record_layout && CHANNEL_PROFILE.record_layout.groups);
+    for (var index = 0; index < configured.length; index++) {
+        if (layer.name === configured[index]) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function addGlobalLayersOutsideRecordLayouts(container, layerIndex) {
+    for (var index = 0; index < container.layers.length; index++) {
+        var layer = container.layers[index];
+        // Each selectable layout is mutually exclusive. Do not traverse it from
+        // the document root, otherwise hidden alternative layouts would receive
+        // the current row's values. Public layers outside those groups remain
+        // dynamic and are applied for every selected layout.
+        if (isRecordLayoutGroup(layer)) {
+            continue;
+        }
+        addLayerToIndex(layer, layerIndex);
+        if (layer.typename === "LayerSet") {
+            addGlobalLayersOutsideRecordLayouts(layer, layerIndex);
+        }
+    }
+}
+
+function buildRecordLayerIndex(document) {
+    var layerIndex = { text: {}, image: {}, switches: {} };
+    if (ACTIVE_LAYOUT_GROUP) {
+        addLayers(ACTIVE_LAYOUT_GROUP, layerIndex);
+        addGlobalLayersOutsideRecordLayouts(document, layerIndex);
+    } else {
+        addLayers(document, layerIndex);
+    }
+    return layerIndex;
 }
 
 function keyCount(collection) {
@@ -417,6 +681,47 @@ function keyCount(collection) {
         }
     }
     return count;
+}
+
+function requiredLayerMatches(layerIndex, required) {
+    var collection = required.type === "text" ? layerIndex.text : layerIndex.image;
+    var names = bindingNames(required.name);
+    var normalizedNames = [];
+    for (var normalizedIndex = 0; normalizedIndex < names.length; normalizedIndex++) {
+        var normalizedName = normalizeBindingKey(names[normalizedIndex]);
+        var alreadyIncluded = false;
+        for (var includedIndex = 0; includedIndex < normalizedNames.length; includedIndex++) {
+            if (normalizedNames[includedIndex] === normalizedName) {
+                alreadyIncluded = true;
+                break;
+            }
+        }
+        if (!alreadyIncluded) {
+            normalizedNames.push(normalizedName);
+        }
+    }
+    var matches = [];
+    for (var collectionName in collection) {
+        if (!collection.hasOwnProperty(collectionName)) { continue; }
+        var candidateName = normalizeBindingKey(collectionName);
+        var nameMatched = false;
+        for (var nameIndex = 0; nameIndex < normalizedNames.length; nameIndex++) {
+            if (candidateName === normalizedNames[nameIndex]) {
+                nameMatched = true;
+                break;
+            }
+        }
+        if (!nameMatched) { continue; }
+        var layers = collection[collectionName] || [];
+        for (var layerIndexValue = 0; layerIndexValue < layers.length; layerIndexValue++) {
+            var exists = false;
+            for (var matchIndex = 0; matchIndex < matches.length; matchIndex++) {
+                if (matches[matchIndex] === layers[layerIndexValue]) { exists = true; break; }
+            }
+            if (!exists) { matches.push(layers[layerIndexValue]); }
+        }
+    }
+    return matches;
 }
 
 function profileBindingErrors(template, profile) {
@@ -446,16 +751,16 @@ function requiredBindingErrors(container, profile, scope) {
     var errors = [];
     for (var index = 0; index < profile.required_psd_variables.length; index++) {
         var required = profile.required_psd_variables[index];
-        var collection = required.type === "text" ? layerIndex.text : layerIndex.image;
-        if (!collection[required.name] || collection[required.name].length === 0) {
+        var matches = requiredLayerMatches(layerIndex, required);
+        if (!matches.length) {
             if (isOptionalProfileVariable(profile, required)) {
                 continue;
             }
             errors.push("E_VAR_UNBOUND: " + scope + required.name + " 未绑定到 " + (required.type === "text" ? "@文本层" : "!智能对象"));
             continue;
         }
-        for (var layerIndexValue = 0; layerIndexValue < collection[required.name].length; layerIndexValue++) {
-            var layer = collection[required.name][layerIndexValue];
+        for (var layerIndexValue = 0; layerIndexValue < matches.length; layerIndexValue++) {
+            var layer = matches[layerIndexValue];
             if ((required.type === "text" && layer.kind !== LayerKind.TEXT) ||
                 (required.type === "smart_object" && layer.kind !== LayerKind.SMARTOBJECT)) {
                 errors.push("E_VAR_TYPE_MISMATCH: " + scope + required.name);
@@ -468,16 +773,17 @@ function requiredBindingErrors(container, profile, scope) {
 
 function recordLayoutBindingErrors(template, profile) {
     var errors = [];
-    var configured = profile.record_layout && profile.record_layout.groups;
+    var configured = asNameList(profile.record_layout && profile.record_layout.groups);
     if (!configured || configured.length === 0) {
         return ["E_CONFIG_MISMATCH: 卫品渠道缺少版式组配置"];
     }
-    var requested = profile.active_layout_groups && profile.active_layout_groups.length > 0 ? profile.active_layout_groups : configured;
+    var active = asNameList(profile.active_layout_groups);
+    var requested = active.length > 0 ? active : configured;
     var matches = [];
     for (var index = 0; index < requested.length; index++) {
         matches.push([]);
     }
-    collectRecordLayoutMatches(template, requested, matches);
+    collectProfileRecordLayoutMatches(template, requested, matches, profile);
     for (var layoutIndex = 0; layoutIndex < requested.length; layoutIndex++) {
         var layoutName = requested[layoutIndex];
         var layoutMatches = matches[layoutIndex];
@@ -485,19 +791,16 @@ function recordLayoutBindingErrors(template, profile) {
             errors.push("E_CONFIG_MISMATCH: 版式组 " + layoutName + " 缺失、重复或不是图层组");
             continue;
         }
-        var layout = layoutMatches[0];
         var scope = layoutName + "/";
-        var layoutErrors = requiredBindingErrors(layout, profile, scope);
+        var layoutErrors = requiredBindingErrors(layoutMatches[0], profile, scope);
         for (var errorIndex = 0; errorIndex < layoutErrors.length; errorIndex++) {
             errors.push(layoutErrors[errorIndex]);
         }
-        var layerIndex = { text: {}, image: {}, switches: {} };
-        addLayers(layout, layerIndex);
-        var giftSwitches = hygieneGiftSwitchNames();
-        for (var giftSwitchIndex = 0; giftSwitchIndex < giftSwitches.length; giftSwitchIndex++) {
-            if (!layerIndex.switches[giftSwitches[giftSwitchIndex]]) {
-                errors.push("E_VAR_UNBOUND: " + scope + "赠品开关组未完整绑定：" + giftSwitches[giftSwitchIndex]);
-            }
+        var layoutIndexData = { text: {}, image: {}, switches: {} };
+        addLayers(layoutMatches[0], layoutIndexData);
+        var giftsAreOptional = isOptionalProfileKey("赠品图1") && isOptionalProfileKey("赠品文案1");
+        if (!usesStaticSupportArt(profile) && !giftsAreOptional && !layoutIndexData.switches["赠品区域"]) {
+            errors.push("E_VAR_UNBOUND: " + scope + "赠品区域开关组未绑定");
         }
     }
     return errors;
@@ -513,8 +816,10 @@ function validateTemplate(template) {
     }
     var layerIndex = { text: {}, image: {}, switches: {} };
     addLayers(template, layerIndex);
-    if (keyCount(layerIndex.text) === 0 || keyCount(layerIndex.image) === 0) {
-        throw new Error("当前 PSD 尚未按规范完成改造：至少需要一个 @文本层和一个 !智能对象层。");
+    if (keyCount(layerIndex.text) === 0 || (!usesStaticProductArt(CHANNEL_PROFILE) && keyCount(layerIndex.image) === 0)) {
+        throw new Error(usesStaticProductArt(CHANNEL_PROFILE) ?
+            "当前固定商品组合 PSD 尚未按规范完成改造：至少需要一个 @文本层。" :
+            "当前 PSD 尚未按规范完成改造：至少需要一个 @文本层和一个 !智能对象层。");
     }
     var bindingErrors = profileBindingErrors(template, CHANNEL_PROFILE);
     if (bindingErrors.length) {
@@ -536,15 +841,15 @@ function setSwitches(layerIndex, record, result) {
             continue;
         }
         var value;
-        if (key === "优惠券" || key === "优惠券开关") {
-            value = switchValue(record, key);
+        if (record && record.hasOwnProperty(key) && (isYes(record[key]) || isNo(record[key]))) {
+            // An exact #字段名 column is an explicit designer/operator override.
+            value = record[key];
         } else {
-            // Show the group long enough to try each child smart-object
-            // replacement. File accessibility is confirmed by setImageLayer;
-            // checking an SMB path here used to silently hide an entire group.
-            value = (isGiftSwitchKey(key) ? optionalGroupHasAnyValues(layerIndex.switches[key], record) : optionalGroupHasValues(layerIndex.switches[key], record)) ? "是" : "否";
-            record[key] = value;
+            // A switch group is only a visibility container. It follows
+            // dynamic children, so new fields need no channel-specific rule.
+            value = switchGroupsHaveBoundValue(layerIndex.switches[key], record) ? "是" : "否";
         }
+        SWITCH_STATE[key] = value;
         var visible = false;
         if (isYes(value)) {
             visible = true;
@@ -561,33 +866,79 @@ function setSwitches(layerIndex, record, result) {
     }
 }
 
+function hasBindingForKey(layerIndex, key) {
+    var names = bindingNames(key);
+    for (var nameIndex = 0; nameIndex < names.length; nameIndex++) {
+        var normalized = normalizeBindingKey(names[nameIndex]);
+        for (var textKey in layerIndex.text) {
+            if (layerIndex.text.hasOwnProperty(textKey) && normalizeBindingKey(textKey) === normalized) { return true; }
+        }
+        for (var imageKey in layerIndex.image) {
+            if (layerIndex.image.hasOwnProperty(imageKey) && normalizeBindingKey(imageKey) === normalized) { return true; }
+        }
+        for (var switchKey in layerIndex.switches) {
+            if (layerIndex.switches.hasOwnProperty(switchKey) && normalizeBindingKey(switchKey) === normalized) { return true; }
+        }
+    }
+    return false;
+}
+
+function dynamicBindingWarnings(layerIndex, record) {
+    if (!CHANNEL_PROFILE || !CHANNEL_PROFILE.matching || !CHANNEL_PROFILE.matching.allow_unknown_fields) {
+        return [];
+    }
+    var warnings = [];
+    for (var key in record) {
+        if (!record.hasOwnProperty(key) || isBlank(record[key])) { continue; }
+        if (key === "商品文件名" || key === "货号" || key === "profile_id" || key === "profile_version" ||
+            key === "variant" || key === "预检异常" || key === "预检提醒" || key === "版式组") { continue; }
+        var field = profileFieldForKey(key);
+        if (field && String(field.field_id) === "product_name") { continue; }
+        if (!hasBindingForKey(layerIndex, key)) {
+            warnings.push("W_BINDING_TABLE_ONLY: CSV 字段【" + key + "】有值，但 PSD 没有同名 @文本层或 !智能对象");
+        }
+    }
+    for (var textKey in layerIndex.text) {
+        if (layerIndex.text.hasOwnProperty(textKey) && layerIndex.image.hasOwnProperty(textKey)) {
+            warnings.push("W_BINDING_TYPE_MISMATCH: " + textKey + " 同时存在 @文本层和 !智能对象");
+        }
+    }
+    return warnings;
+}
+
 function isGiftSwitchKey(key) {
-    var giftSwitches = hygieneGiftSwitchNames();
-    for (var index = 0; index < giftSwitches.length; index++) {
-        if (key === giftSwitches[index]) {
+    return key === "赠品顶部" || key === "赠品区域";
+}
+
+function isPriceSwitchKey(key) {
+    return key === "价格优惠券" || key === "价格立减";
+}
+
+function switchGroupsHaveBoundValue(groups, record) {
+    for (var index = 0; index < groups.length; index++) {
+        if (groupHasBoundValue(groups[index], record)) {
             return true;
         }
     }
     return false;
 }
 
-function hygieneGiftSwitchNames() {
-    var configured = CHANNEL_PROFILE && CHANNEL_PROFILE.record_layout && CHANNEL_PROFILE.record_layout.gift_switches;
-    return configured && configured.length ? configured : ["赠品顶部", "赠品区域"];
-}
-
-function optionalGroupHasValues(groups, record) {
-    for (var index = 0; index < groups.length; index++) {
-        if (groups[index].typename === "LayerSet" && groupHasAllImageValues(groups[index], record)) {
-            return true;
-        }
+function groupHasBoundValue(group, record) {
+    if (!group || !group.layers) {
+        return false;
     }
-    return false;
-}
-
-function optionalGroupHasAnyValues(groups, record) {
-    for (var index = 0; index < groups.length; index++) {
-        if (groups[index].typename === "LayerSet" && groupHasAnyImageValue(groups[index], record)) {
+    for (var index = 0; index < group.layers.length; index++) {
+        var child = group.layers[index];
+        if (startsWith(child.name, "@")) {
+            if (!isBlank(recordValue(record, child.name.substring(1)))) {
+                return true;
+            }
+        } else if (startsWith(child.name, "!")) {
+            var imageValue = recordValue(record, child.name.substring(1));
+            if (!isBlank(imageValue) && !isDisabledImageValue(imageValue)) {
+                return true;
+            }
+        } else if (child.typename === "LayerSet" && groupHasBoundValue(child, record)) {
             return true;
         }
     }
@@ -600,7 +951,7 @@ function groupHasAllImageValues(group, record) {
         var child = group.layers[index];
         if (startsWith(child.name, "!")) {
             foundImage = true;
-            var imageValue = record[child.name.substring(1)];
+            var imageValue = recordValue(record, child.name.substring(1));
             if (isBlank(imageValue) || isDisabledImageValue(imageValue)) {
                 return false;
             }
@@ -618,7 +969,7 @@ function groupHasAnyImageValue(group, record) {
     for (var index = 0; index < group.layers.length; index++) {
         var child = group.layers[index];
         if (startsWith(child.name, "!")) {
-            var imageValue = record[child.name.substring(1)];
+            var imageValue = recordValue(record, child.name.substring(1));
             if (!isBlank(imageValue) && !isDisabledImageValue(imageValue)) {
                 return true;
             }
@@ -676,34 +1027,55 @@ function groupHasAnyReplacedImageLayer(group, result) {
 
 function reconcileOptionalGroups(layerIndex, record, result) {
     for (var key in layerIndex.switches) {
-        if (!layerIndex.switches.hasOwnProperty(key) || key === "优惠券" || key === "优惠券开关") {
+        if (!layerIndex.switches.hasOwnProperty(key)) {
             continue;
         }
         var groups = layerIndex.switches[key];
-        var requested = isYes(record[key]);
-        if (!requested) {
-            for (var hiddenIndex = 0; hiddenIndex < groups.length; hiddenIndex++) {
-                groups[hiddenIndex].visible = false;
-            }
-            record[key] = "否";
+        var requested = isYes(switchStateValue(record, key));
+        for (var groupIndex = 0; groupIndex < groups.length; groupIndex++) {
+            groups[groupIndex].visible = requested;
+        }
+        if (requested) {
+            addIssue(result, "可选图层已展示：#" + key);
+        } else {
+            addIssue(result, "可选图层已隐藏：#" + key);
+        }
+    }
+}
+
+function collectNamedGroups(container, name, output) {
+    if (!container || !container.layers) {
+        return;
+    }
+    for (var index = 0; index < container.layers.length; index++) {
+        var layer = container.layers[index];
+        if (layer.typename !== "LayerSet") {
             continue;
         }
-        var hasUsableImage = false;
-        for (var index = 0; index < groups.length; index++) {
-            var ready = groups[index].typename === "LayerSet" && (isGiftSwitchKey(key) ? groupHasAnyReplacedImageLayer(groups[index], result) : groupHasAllReplacedImageLayers(groups[index], result));
-            if (ready) {
-                hasUsableImage = true;
-                break;
-            }
+        if (layer.name === name) {
+            output.push(layer);
         }
+        collectNamedGroups(layer, name, output);
+    }
+}
+
+function reconcileGiftSlotVisibility(container, record, result) {
+    // The member strip is one switch group, but each of its three columns is
+    // an independent slot. Hide only the empty columns so one/two gift rows
+    // do not leave stale master artwork in the remaining columns.
+    for (var slotIndex = 1; slotIndex <= 3; slotIndex++) {
+        var groups = [];
+        collectNamedGroups(container, "赠品槽" + slotIndex, groups);
+        var imageKey = "赠品图" + slotIndex;
+        var copyKey = "赠品文案" + slotIndex;
+        var imageValue = recordValue(record, imageKey);
+        var copyValue = recordValue(record, copyKey);
+        var replaced = result && result.optionalImageReplaced &&
+            result.optionalImageReplaced[imageKey] === true;
+        var visible = !isBlank(imageValue) && !isDisabledImageValue(imageValue) &&
+            !isBlank(copyValue) && replaced;
         for (var groupIndex = 0; groupIndex < groups.length; groupIndex++) {
-            groups[groupIndex].visible = hasUsableImage;
-        }
-        record[key] = hasUsableImage ? "是" : "否";
-        if (hasUsableImage) {
-            addIssue(result, "可选图层已展示：#" + key);
-        } else if (requested) {
-            addIssue(result, "可选图层已隐藏：#" + key);
+            groups[groupIndex].visible = visible;
         }
     }
 }
@@ -711,7 +1083,7 @@ function reconcileOptionalGroups(layerIndex, record, result) {
 function insideDisabledSwitch(layer, record) {
     var parent = layer.parent;
     while (parent && parent.typename !== "Document") {
-        if (startsWith(parent.name, "#") && !isYes(switchValue(record, parent.name.substring(1)))) {
+        if (startsWith(parent.name, "#") && !isYes(switchStateValue(record, parent.name.substring(1)))) {
             return true;
         }
         parent = parent.parent;
@@ -719,12 +1091,14 @@ function insideDisabledSwitch(layer, record) {
     return false;
 }
 
-function switchValue(record, key) {
-    var value = record[key];
-    if (key === "优惠券" && isBlank(value) && !isBlank(record["优惠券开关"])) {
-        return record["优惠券开关"];
+function switchStateValue(record, key) {
+    if (SWITCH_STATE.hasOwnProperty(key)) {
+        return SWITCH_STATE[key];
     }
-    return value;
+    if (record && record.hasOwnProperty(key) && (isYes(record[key]) || isNo(record[key]))) {
+        return record[key];
+    }
+    return "否";
 }
 
 function layerWidth(layer) {
@@ -747,6 +1121,31 @@ function rectWidth(rect) {
 
 function rectHeight(rect) {
     return rect.bottom - rect.top;
+}
+
+function textFitConfig(key) {
+    if (!CHANNEL_PROFILE || !CHANNEL_PROFILE.text_fit || !CHANNEL_PROFILE.text_fit.frame_by_key) {
+        return null;
+    }
+    var configured = CHANNEL_PROFILE.text_fit.frame_by_key[key];
+    return configured || null;
+}
+
+function textFrameForKey(key, originalRect) {
+    var configured = textFitConfig(key);
+    if (!configured || !app.activeDocument) {
+        return null;
+    }
+    var canvasWidth = app.activeDocument.width.as("px");
+    var canvasHeight = app.activeDocument.height.as("px");
+    var left = typeof configured.left_px === "number" ? configured.left_px : canvasWidth * Number(configured.left_ratio || 0);
+    var right = typeof configured.right_px === "number" ? configured.right_px : canvasWidth * Number(configured.right_ratio || 1);
+    var top = typeof configured.top_px === "number" ? configured.top_px : originalRect.top;
+    var bottom = typeof configured.bottom_px === "number" ? configured.bottom_px : Math.min(originalRect.bottom, canvasHeight);
+    if (!(right > left) || !(bottom > top)) {
+        return null;
+    }
+    return { left: left, top: top, right: right, bottom: bottom };
 }
 
 function siblingLeftBoundary(layer, siblingNames, originalRect) {
@@ -773,6 +1172,10 @@ function textMaxWidth(layer, key, originalRect) {
     if (maxWidth === null) {
         maxWidth = rectWidth(originalRect) * 0.98;
     }
+    var configuredFrame = textFrameForKey(key, originalRect);
+    if (configuredFrame) {
+        maxWidth = Math.min(maxWidth, rectWidth(configuredFrame));
+    }
     var adjacentBoundary = null;
     if (key === "折扣") {
         adjacentBoundary = siblingLeftBoundary(layer, ["折"], originalRect);
@@ -797,7 +1200,12 @@ function autoFitMinimumScale(key) {
     }
     for (var index = 0; index < CHANNEL_PROFILE.text_fit.keys.length; index++) {
         if (CHANNEL_PROFILE.text_fit.keys[index] === key) {
-            var scale = Number(CHANNEL_PROFILE.text_fit.minimum_scale);
+            var configured = CHANNEL_PROFILE.text_fit.minimum_scale;
+            if (CHANNEL_PROFILE.text_fit.minimum_scale_by_key &&
+                typeof CHANNEL_PROFILE.text_fit.minimum_scale_by_key[key] !== "undefined") {
+                configured = CHANNEL_PROFILE.text_fit.minimum_scale_by_key[key];
+            }
+            var scale = Number(configured);
             return scale > 0 && scale <= 1 ? scale : 0.85;
         }
     }
@@ -807,6 +1215,10 @@ function autoFitMinimumScale(key) {
 function fitTextToOriginalFrame(layer, key, originalRect, minimumScale) {
     var maxWidth = textMaxWidth(layer, key, originalRect);
     var maxHeight = Math.max(1, rectHeight(originalRect) * 0.98);
+    var configuredFrame = textFrameForKey(key, originalRect);
+    if (configuredFrame) {
+        maxHeight = Math.min(maxHeight, rectHeight(configuredFrame));
+    }
     var appliedScale = 1;
     var fitted = false;
     for (var attempt = 0; attempt < 12; attempt++) {
@@ -837,18 +1249,203 @@ function fitTextToOriginalFrame(layer, key, originalRect, minimumScale) {
         appliedScale *= factor;
     }
 
-    // Preserve the template's visual anchor after a point-text resize.
+    // Preserve the template's visual anchor after a point-text resize. The
+    // selling-point headline and final-price number are centered; anchoring
+    // either by left edge would make shorter values drift inside their badge.
     var finalRect = layerRect(layer);
+    var shiftX;
+    if (configuredFrame && key === "价格1") {
+        // Price numbers share a fixed unit layer (@价格2) on their right.
+        // Keep the numeric layer left-anchored so normal two-digit values do
+        // not drift, while long values can shrink only inside the declared
+        // price frame.
+        shiftX = configuredFrame.left - finalRect.left;
+    } else if (configuredFrame) {
+        var frameCenterX = (configuredFrame.left + configuredFrame.right) / 2;
+        var configuredFinalCenterX = (finalRect.left + finalRect.right) / 2;
+        shiftX = frameCenterX - configuredFinalCenterX;
+    } else if (key === "卖点" || key === "到手") {
+        var originalCenterX = (originalRect.left + originalRect.right) / 2;
+        var finalCenterX = (finalRect.left + finalRect.right) / 2;
+        shiftX = originalCenterX - finalCenterX;
+    } else {
+        shiftX = originalRect.left - finalRect.left;
+    }
     layer.translate(
-        UnitValue(originalRect.left - finalRect.left, "px"),
+        UnitValue(shiftX, "px"),
         UnitValue(originalRect.top - finalRect.top, "px")
     );
     finalRect = layerRect(layer);
+    if (configuredFrame) {
+        var frameShiftX = 0;
+        if (finalRect.left < configuredFrame.left) {
+            frameShiftX = configuredFrame.left - finalRect.left;
+        } else if (finalRect.right > configuredFrame.right) {
+            frameShiftX = configuredFrame.right - finalRect.right;
+        }
+        if (Math.abs(frameShiftX) > 0.5) {
+            layer.translate(UnitValue(frameShiftX, "px"), UnitValue(0, "px"));
+            finalRect = layerRect(layer);
+        }
+    }
     return {
-        fitted: rectWidth(finalRect) <= maxWidth + 0.5 && rectHeight(finalRect) <= maxHeight + 0.5,
+        fitted: rectWidth(finalRect) <= maxWidth + 0.5 && rectHeight(finalRect) <= maxHeight + 0.5 &&
+            (!configuredFrame || (finalRect.left >= configuredFrame.left - 0.5 && finalRect.right <= configuredFrame.right + 0.5)),
         maxWidth: maxWidth,
         finalRect: finalRect
     };
+}
+
+function photoshopTextValue(value) {
+    return String(value == null ? "" : value).replace(/\r\n/g, "\r").replace(/\n/g, "\r");
+}
+
+function textStyleRangePlan(key, value, sourceCount) {
+    var visibleText = photoshopTextValue(value);
+    var totalLength = visibleText.length + 1;
+    var ranges = [];
+    var markerIndex;
+    var decimalIndex;
+    var integerStart;
+
+    if (key === "卖点") {
+        markerIndex = visibleText.indexOf("*");
+        var fullWidthMarkerIndex = visibleText.indexOf("＊");
+        if (markerIndex < 0 || (fullWidthMarkerIndex >= 0 && fullWidthMarkerIndex < markerIndex)) {
+            markerIndex = fullWidthMarkerIndex;
+        }
+        if (markerIndex < 0) {
+            return sourceCount > 0 ? [{ from: 0, to: totalLength, source: 0 }] : null;
+        }
+        if (sourceCount < 3 || markerIndex === 0) {
+            return null;
+        }
+        ranges.push({ from: 0, to: markerIndex, source: 0 });
+        ranges.push({ from: markerIndex, to: markerIndex + 1, source: 1 });
+        ranges.push({ from: markerIndex + 1, to: totalLength, source: 2 });
+        return ranges;
+    }
+
+    if (key === "到手") {
+        integerStart = /^[¥￥$]/.test(visibleText) ? 1 : 0;
+        decimalIndex = visibleText.indexOf(".", integerStart);
+        if (integerStart > 0) {
+            if (sourceCount < 2 || visibleText.length <= integerStart) {
+                return null;
+            }
+            ranges.push({ from: 0, to: integerStart, source: 0 });
+            if (decimalIndex >= 0) {
+                if (sourceCount < 3 || decimalIndex === integerStart) {
+                    return null;
+                }
+                ranges.push({ from: integerStart, to: decimalIndex, source: 1 });
+                ranges.push({ from: decimalIndex, to: totalLength, source: 2 });
+            } else {
+                ranges.push({ from: integerStart, to: totalLength, source: 1 });
+            }
+            return ranges;
+        }
+        if (decimalIndex >= 0) {
+            if (sourceCount < 3 || decimalIndex === 0) {
+                return null;
+            }
+            ranges.push({ from: 0, to: decimalIndex, source: 1 });
+            ranges.push({ from: decimalIndex, to: totalLength, source: 2 });
+            return ranges;
+        }
+        return sourceCount > 1 ? [{ from: 0, to: totalLength, source: 1 }] : null;
+    }
+
+    if (key === "价格活动价" || key === "价格优惠券" || key === "价格立减") {
+        decimalIndex = visibleText.indexOf(".");
+        if (decimalIndex >= 0) {
+            if (sourceCount < 2 || decimalIndex === 0) {
+                return null;
+            }
+            ranges.push({ from: 0, to: decimalIndex, source: 0 });
+            ranges.push({ from: decimalIndex, to: totalLength, source: 1 });
+            return ranges;
+        }
+        return sourceCount > 0 ? [{ from: 0, to: totalLength, source: 0 }] : null;
+    }
+
+    return null;
+}
+
+function paragraphRangePlan(text, sourceCount) {
+    var ranges = [];
+    var start = 0;
+    for (var index = 0; index < text.length; index++) {
+        if (text.charAt(index) === "\r") {
+            ranges.push({
+                from: start,
+                to: index + 1,
+                source: Math.min(ranges.length, sourceCount - 1)
+            });
+            start = index + 1;
+        }
+    }
+    ranges.push({
+        from: start,
+        to: text.length + 1,
+        source: Math.min(ranges.length, sourceCount - 1)
+    });
+    return ranges;
+}
+
+function replaceDescriptorRangeList(descriptor, rangeKey, ranges) {
+    var sourceList = descriptor.getList(rangeKey);
+    var replacement = new ActionList();
+    var fromKey = stringIDToTypeID("from");
+    var toKey = stringIDToTypeID("to");
+    for (var index = 0; index < ranges.length; index++) {
+        if (ranges[index].source < 0 || ranges[index].source >= sourceList.count || ranges[index].to <= ranges[index].from) {
+            return false;
+        }
+        var rangeDescriptor = sourceList.getObjectValue(ranges[index].source);
+        rangeDescriptor.putInteger(fromKey, ranges[index].from);
+        rangeDescriptor.putInteger(toKey, ranges[index].to);
+        replacement.putObject(sourceList.getObjectType(ranges[index].source), rangeDescriptor);
+    }
+    descriptor.putList(rangeKey, replacement);
+    return true;
+}
+
+function setTextContentsPreservingStyle(layer, value, key) {
+    try {
+        app.activeDocument.activeLayer = layer;
+        var targetReference = new ActionReference();
+        targetReference.putEnumerated(charIDToTypeID("Lyr "), charIDToTypeID("Ordn"), charIDToTypeID("Trgt"));
+        var layerDescriptor = executeActionGet(targetReference);
+        var textKey = stringIDToTypeID("textKey");
+        var styleRangeKey = stringIDToTypeID("textStyleRange");
+        var paragraphRangeKey = stringIDToTypeID("paragraphStyleRange");
+        if (!layerDescriptor.hasKey(textKey)) { return false; }
+        var textDescriptor = layerDescriptor.getObjectValue(textKey);
+        var oldValue = textDescriptor.getString(textKey);
+        var targetValue = photoshopTextValue(value);
+        if (!textDescriptor.hasKey(styleRangeKey)) { return false; }
+        var sourceStyleCount = textDescriptor.getList(styleRangeKey).count;
+        var styleRanges = textStyleRangePlan(key, value, sourceStyleCount);
+        if (!styleRanges && oldValue.length !== targetValue.length) { return false; }
+        if (styleRanges && !replaceDescriptorRangeList(textDescriptor, styleRangeKey, styleRanges)) { return false; }
+        if (textDescriptor.hasKey(paragraphRangeKey)) {
+            var paragraphCount = textDescriptor.getList(paragraphRangeKey).count;
+            if (paragraphCount < 1 || !replaceDescriptorRangeList(textDescriptor, paragraphRangeKey, paragraphRangePlan(targetValue, paragraphCount))) {
+                return false;
+            }
+        }
+        textDescriptor.putString(textKey, targetValue);
+        var setDescriptor = new ActionDescriptor();
+        var setReference = new ActionReference();
+        setReference.putEnumerated(charIDToTypeID("TxLr"), charIDToTypeID("Ordn"), charIDToTypeID("Trgt"));
+        setDescriptor.putReference(charIDToTypeID("null"), setReference);
+        setDescriptor.putObject(charIDToTypeID("T   "), charIDToTypeID("TxLr"), textDescriptor);
+        executeAction(charIDToTypeID("setd"), setDescriptor, DialogModes.NO);
+        return true;
+    } catch (error) {
+        return false;
+    }
 }
 
 function setTextLayer(layer, value, key, record, result) {
@@ -860,7 +1457,9 @@ function setTextLayer(layer, value, key, record, result) {
         if (key === "备注") {
             layer.visible = false;
         }
-        if (isRequiredTextKey(key)) {
+        if (dataFieldsOptional() && isProfileTextKey(key)) {
+            addDataPrecheckWarning(result, "字段为空：" + key);
+        } else if (isRequiredTextKey(key)) {
             result.emptyField = true;
             addCode(result, "E_EMPTY_FIELD");
             addIssue(result, "字段为空：" + key);
@@ -871,24 +1470,40 @@ function setTextLayer(layer, value, key, record, result) {
         layer.visible = true;
     }
     var originalRect = layerRect(layer);
-    layer.textItem.contents = String(value);
-    var minimumScale = autoFitMinimumScale(key);
-    if (minimumScale !== null) {
-        var fitResult = fitTextToOriginalFrame(layer, key, originalRect, minimumScale);
-        if (fitResult.fitted) {
-            addIssue(result, "文案已自动缩字适配：" + key);
-        }
+    if (!setTextContentsPreservingStyle(layer, value, key)) {
+        layer.textItem.contents = String(value);
     }
-    // Other text fields retain the PSD's original visual hierarchy. They are
-    // reported for design review instead of being resized automatically.
+    // These point-text layers sit inside fixed visual frames. Keep their
+    // paragraph justification centered while preserving the PSD designer's
+    // original font size and transform.
+    if (key === "卖点" || key === "到手") {
+        try { layer.textItem.justification = Justification.CENTER; } catch (ignoreJustification) {}
+    }
     var textRect = layerRect(layer);
-    var maxWidth = textMaxWidth(layer, key, originalRect);
-    var maxHeight = Math.max(1, rectHeight(originalRect) * 0.98);
+    var configuredFrame = textFrameForKey(key, originalRect);
+    // Price fitting is opt-in per channel/variant. The profile must declare a
+    // concrete frame, so no unrelated text layer can be resized implicitly.
+    var priceFitMinimumScale = autoFitMinimumScale(key);
+    if (key === "价格1" && configuredFrame && priceFitMinimumScale !== null) {
+        var priceFit = fitTextToOriginalFrame(layer, key, originalRect, priceFitMinimumScale);
+        textRect = priceFit.finalRect;
+    }
     var canvas = app.activeDocument;
     var outOfCanvas = textRect.left < -0.5 || textRect.top < -0.5 ||
         textRect.right > canvas.width.as("px") + 0.5 ||
         textRect.bottom > canvas.height.as("px") + 0.5;
-    if (rectWidth(textRect) > maxWidth + 0.5 || rectHeight(textRect) > maxHeight + 0.5 || outOfCanvas) {
+    var outOfConfiguredFrame = configuredFrame && (
+        textRect.left < configuredFrame.left - 0.5 ||
+        textRect.right > configuredFrame.right + 0.5 ||
+        textRect.top < configuredFrame.top - 0.5 ||
+        textRect.bottom > configuredFrame.bottom + 0.5
+    );
+    // Point-text bounds naturally change with the value. The original bounds
+    // are only a measurement of the placeholder, not a designer-defined text
+    // frame, so comparing against them produces false "overflow" warnings for
+    // otherwise correct PSD-native text. Only flag a real canvas escape or an
+    // explicit profile frame that the template declares as constrained.
+    if (outOfCanvas || outOfConfiguredFrame) {
         result.textOverflow = true;
         addCode(result, "W_TEXT_OVERFLOW");
         addIssue(result, "文案超框：" + key);
@@ -900,6 +1515,33 @@ function replaceSmartObject(layer, imageFile) {
     var descriptor = new ActionDescriptor();
     descriptor.putPath(charIDToTypeID("null"), imageFile);
     executeAction(stringIDToTypeID("placedLayerReplaceContents"), descriptor, DialogModes.NO);
+}
+
+function isolateSmartObjectForReplacement(layer) {
+    // Photoshop smart-object instances can share one embedded object. Replacing
+    // one shared instance then changes every linked instance, including
+    // decorative layers that are not table-driven. "New Smart Object via Copy"
+    // creates an independent embedded object while retaining the layer frame.
+    if (!layer || layer.typename !== "ArtLayer" || layer.kind !== LayerKind.SMARTOBJECT) {
+        return { layer: layer, copied: false };
+    }
+    var document = app.activeDocument;
+    var original = layer;
+    var originalName = String(layer.name);
+    document.activeLayer = original;
+    executeAction(stringIDToTypeID("placedLayerMakeCopy"), undefined, DialogModes.NO);
+    var copy = document.activeLayer;
+    if (!copy || copy === original || copy.typename !== "ArtLayer" || copy.kind !== LayerKind.SMARTOBJECT) {
+        throw new Error("无法建立独立智能对象副本：" + originalName);
+    }
+    copy.name = originalName;
+    try {
+        original.remove();
+    } catch (removeError) {
+        try { copy.remove(); } catch (cleanupError) {}
+        throw new Error("无法替换共享智能对象副本：" + originalName + "（" + removeError.message + "）");
+    }
+    return { layer: copy, copied: true };
 }
 
 function layerRect(layer) {
@@ -924,7 +1566,14 @@ function visiblePixelRect(layer) {
         var rect = layerRect(probe);
         probe.remove();
         probe = null;
-        return rect;
+        // Some nested smart objects rasterise to an empty probe even though
+        // their original placeholder bounds are valid (notably gift slot 1
+        // in the hygiene member template). Keep the compatibility path by
+        // falling back to the original smart-object frame in that case.
+        if (rect.right > rect.left && rect.bottom > rect.top) {
+            return rect;
+        }
+        return layerRect(layer);
     } catch (error) {
         if (probe) {
             try {
@@ -944,8 +1593,10 @@ function fitProductToTemplateFrame(layer, targetRect) {
     var currentRect = visiblePixelRect(layer);
     var currentWidth = currentRect.right - currentRect.left;
     var currentHeight = currentRect.bottom - currentRect.top;
-    var targetWidth = targetRect.right - targetRect.left;
-    var targetHeight = targetRect.bottom - targetRect.top;
+    var frameWidth = targetRect.right - targetRect.left;
+    var frameHeight = targetRect.bottom - targetRect.top;
+    var targetWidth = frameWidth * PRODUCT_SAFE_SCALE;
+    var targetHeight = frameHeight * PRODUCT_SAFE_SCALE;
     if (currentWidth <= 0 || currentHeight <= 0 || targetWidth <= 0 || targetHeight <= 0) {
         throw new Error("商品图展示框尺寸无效");
     }
@@ -959,7 +1610,7 @@ function fitProductToTemplateFrame(layer, targetRect) {
     var targetCenterX = (targetRect.left + targetRect.right) / 2;
     var targetCenterY = (targetRect.top + targetRect.bottom) / 2;
     var shiftX = targetCenterX - currentCenterX;
-    var shiftY = targetCenterY - currentCenterY + PRODUCT_VERTICAL_OFFSET_PX;
+    var shiftY = targetCenterY - currentCenterY;
     layer.translate(UnitValue(shiftX, "px"), UnitValue(shiftY, "px"));
     return Math.abs(scale - 1) > 0.001 || Math.abs(shiftX) > 0.5 || Math.abs(shiftY) > 0.5;
 }
@@ -968,8 +1619,10 @@ function fitOptionalImageToTemplateFrame(layer, targetRect) {
     // Optional new/old-package layers must preserve the exact placement made
     // by the PSD designer. "Replace Contents" can reset a layer transform
     // when the replacement asset has a different canvas size, so restore the
-    // original placeholder frame after every successful replacement.
-    var currentRect = visiblePixelRect(layer);
+    // original placeholder frame after every successful replacement. The
+    // source layer bounds are authoritative here: do not rasterise nested
+    // smart objects or use their transparent-pixel bounds as a second frame.
+    var currentRect = layerRect(layer);
     var currentWidth = currentRect.right - currentRect.left;
     var currentHeight = currentRect.bottom - currentRect.top;
     var targetWidth = targetRect.right - targetRect.left;
@@ -981,7 +1634,7 @@ function fitOptionalImageToTemplateFrame(layer, targetRect) {
     if (Math.abs(scale - 1) > 0.001) {
         layer.resize(scale * 100, scale * 100, AnchorPosition.MIDDLECENTER);
     }
-    currentRect = visiblePixelRect(layer);
+    currentRect = layerRect(layer);
     var shiftX = (targetRect.left + targetRect.right - currentRect.left - currentRect.right) / 2;
     var shiftY = (targetRect.top + targetRect.bottom - currentRect.top - currentRect.bottom) / 2;
     layer.translate(UnitValue(shiftX, "px"), UnitValue(shiftY, "px"));
@@ -1000,10 +1653,14 @@ function setImageLayer(layer, value, key, record, materialIndex, result) {
         return;
     }
     if (isBlank(value) || isDisabledImageValue(value)) {
-        if (key === "商品图") {
-            result.emptyField = true;
-            addCode(result, "E_EMPTY_FIELD");
-            addIssue(result, "字段为空：商品图");
+        if (isMainImageKey(key)) {
+            if (dataFieldsOptional()) {
+                addDataPrecheckWarning(result, "字段为空：商品图");
+            } else {
+                result.emptyField = true;
+                addCode(result, "E_EMPTY_FIELD");
+                addIssue(result, "字段为空：商品图");
+            }
             layer.visible = false;
         } else {
             layer.visible = false;
@@ -1019,10 +1676,14 @@ function setImageLayer(layer, value, key, record, materialIndex, result) {
     }
     var imageFile = findMaterial(value, materialIndex);
     if (!imageFile) {
-        if (key === "商品图") {
-            result.missingImage = true;
-            addCode(result, "E_MISSING_IMAGE");
-            addIssue(result, "缺图：商品图=" + value);
+        if (isMainImageKey(key)) {
+            if (dataFieldsOptional()) {
+                addDataPrecheckWarning(result, "缺图：商品图=" + value);
+            } else {
+                result.missingImage = true;
+                addCode(result, "E_MISSING_IMAGE");
+                addIssue(result, "缺图：商品图=" + value);
+            }
             layer.visible = false;
         } else {
             layer.visible = false;
@@ -1035,8 +1696,14 @@ function setImageLayer(layer, value, key, record, materialIndex, result) {
     }
     try {
         var targetRect = layerRect(layer);
-        replaceSmartObject(layer, imageFile);
-        if (key === "商品图") {
+        var replacementFile = stageMaterialForPhotoshop(imageFile);
+        var isolated = isolateSmartObjectForReplacement(layer);
+        layer = isolated.layer;
+        if (isolated.copied) {
+            addIssue(result, "已隔离共享智能对象：!" + key);
+        }
+        replaceSmartObject(layer, replacementFile);
+        if (isMainImageKey(key)) {
             var resized = fitProductToTemplateFrame(layer, targetRect);
             addIssue(result, resized ? "商品图已按 PSD 展示框定位" : "商品图已按 PSD 展示框居中");
         } else {
@@ -1045,16 +1712,21 @@ function setImageLayer(layer, value, key, record, materialIndex, result) {
             addIssue(result, "可选素材已替换：!" + key + "=" + imageFile.name);
         }
     } catch (error) {
-        if (key === "商品图") {
-            result.missingImage = true;
-            addCode(result, "E_MISSING_IMAGE");
-            addIssue(result, "替换失败：商品图=" + imageFile.name + "（" + error.message + "）");
+        if (isMainImageKey(key)) {
+            if (dataFieldsOptional()) {
+                addDataPrecheckWarning(result, "替换失败：商品图=" + imageFile.name + "（" + error.message + "）");
+                layer.visible = false;
+            } else {
+                result.missingImage = true;
+                addCode(result, "E_MISSING_IMAGE");
+                addIssue(result, "替换失败：商品图=" + imageFile.name + "（" + error.message + "）");
+            }
         } else {
             layer.visible = false;
             result.optionalImageMissing = true;
             markOptionalImageReplacement(result, key, false);
             addCode(result, "W_OPTIONAL_IMAGE_MISSING");
-            addIssue(result, "可选素材替换失败：" + key + "=" + imageFile.name + "（" + error.message + "）");
+                addIssue(result, "可选素材替换失败：" + key + "=" + imageFile.name + "（" + error.message + "）");
         }
     }
 }
@@ -1065,9 +1737,24 @@ function applyRecord(document, record, materialIndex, result) {
         applyPreflightIssue(record, result);
         return;
     }
+    SWITCH_STATE = {};
     selectRecordLayout(document, record);
-    var layerIndex = { text: {}, image: {}, switches: {} };
-    addLayers(ACTIVE_LAYOUT_GROUP || document, layerIndex);
+    var layerIndex = buildRecordLayerIndex(document);
+    var dynamicWarnings = dynamicBindingWarnings(layerIndex, record);
+    for (var dynamicWarningIndex = 0; dynamicWarningIndex < dynamicWarnings.length; dynamicWarningIndex++) {
+        addCode(result, "W_BINDING_TABLE_ONLY");
+        addIssue(result, dynamicWarnings[dynamicWarningIndex]);
+    }
+    var bindingErrors = recordBindingErrors(layerIndex, record);
+    if (bindingErrors.length) {
+        result.templateInvalid = true;
+        addCode(result, "E_VAR_UNBOUND");
+        for (var bindingIndex = 0; bindingIndex < bindingErrors.length; bindingIndex++) {
+            addIssue(result, bindingErrors[bindingIndex]);
+        }
+        applyPreflightIssue(record, result);
+        return;
+    }
     setSwitches(layerIndex, record, result);
 
     for (var textKey in layerIndex.text) {
@@ -1076,7 +1763,8 @@ function applyRecord(document, record, materialIndex, result) {
         }
         var textLayers = layerIndex.text[textKey];
         for (var textIndex = 0; textIndex < textLayers.length; textIndex++) {
-            setTextLayer(textLayers[textIndex], record[textKey], textKey, record, result);
+            var resolvedTextKey = resolveRecordKey(textKey, record);
+            setTextLayer(textLayers[textIndex], recordValue(record, textKey), resolvedTextKey, record, result);
         }
     }
     for (var imageKey in layerIndex.image) {
@@ -1085,11 +1773,32 @@ function applyRecord(document, record, materialIndex, result) {
         }
         var imageLayers = layerIndex.image[imageKey];
         for (var imageIndex = 0; imageIndex < imageLayers.length; imageIndex++) {
-            setImageLayer(imageLayers[imageIndex], record[imageKey], imageKey, record, materialIndex, result);
+            var resolvedImageKey = resolveRecordKey(imageKey, record);
+            setImageLayer(imageLayers[imageIndex], recordValue(record, imageKey), resolvedImageKey, record, materialIndex, result);
         }
     }
     reconcileOptionalGroups(layerIndex, record, result);
+    reconcileGiftSlotVisibility(ACTIVE_LAYOUT_GROUP || document, record, result);
     applyPreflightIssue(record, result);
+}
+
+function recordBindingErrors(layerIndex, record) {
+    if (!CHANNEL_PROFILE || !CHANNEL_PROFILE.required_psd_variables) {
+        return [];
+    }
+    var errors = [];
+    for (var index = 0; index < CHANNEL_PROFILE.required_psd_variables.length; index++) {
+        var required = CHANNEL_PROFILE.required_psd_variables[index];
+        var matches = requiredLayerMatches(layerIndex, required);
+        if (matches.length > 0) {
+            continue;
+        }
+        if ((isOptionalProfileVariable(CHANNEL_PROFILE, required) || dataFieldsOptional()) && isBlank(recordValue(record, required.name))) {
+            continue;
+        }
+        errors.push("PSD 变量缺失：" + required.name + "（当前商品有对应数据）");
+    }
+    return errors;
 }
 
 function applyPhotoshopVariables(document, record, materialIndex, result) {
@@ -1113,9 +1822,13 @@ function applyPhotoshopVariables(document, record, materialIndex, result) {
         }
         if (required.type === "text") {
             if (isBlank(value)) {
-                result.emptyField = true;
-                addCode(result, "E_EMPTY_FIELD");
-                addIssue(result, "字段为空：" + required.name);
+                if (dataFieldsOptional()) {
+                    addDataPrecheckWarning(result, "字段为空：" + required.name);
+                } else {
+                    result.emptyField = true;
+                    addCode(result, "E_EMPTY_FIELD");
+                    addIssue(result, "字段为空：" + required.name);
+                }
                 continue;
             }
             variables.push(variable);
@@ -1123,13 +1836,17 @@ function applyPhotoshopVariables(document, record, materialIndex, result) {
         } else {
             var imageFile = findMaterial(value, materialIndex);
             if (!imageFile) {
-                result.missingImage = true;
-                addCode(result, isBlank(value) ? "E_EMPTY_FIELD" : "E_MISSING_IMAGE");
-                addIssue(result, isBlank(value) ? "字段为空：" + required.name : "缺图：" + required.name + "=" + value);
+                if (dataFieldsOptional()) {
+                    addDataPrecheckWarning(result, isBlank(value) ? "字段为空：" + required.name : "缺图：" + required.name + "=" + value);
+                } else {
+                    result.missingImage = true;
+                    addCode(result, isBlank(value) ? "E_EMPTY_FIELD" : "E_MISSING_IMAGE");
+                    addIssue(result, isBlank(value) ? "字段为空：" + required.name : "缺图：" + required.name + "=" + value);
+                }
                 continue;
             }
             variables.push(variable);
-            values.push(imageFile);
+            values.push(stageMaterialForPhotoshop(imageFile));
         }
     }
     if (hasErrorCode(result)) { return; }
@@ -1150,11 +1867,24 @@ function validateTargetSize(document) {
     var width = Math.round(document.width.as("px"));
     var height = Math.round(document.height.as("px"));
     var target = CHANNEL_PROFILE && CHANNEL_PROFILE.target_size;
+    var acceptedSizes = CHANNEL_PROFILE && CHANNEL_PROFILE.accepted_template_sizes;
     if (!target && CHANNEL_PROFILE && CHANNEL_PROFILE.variants) {
         var variantName = CHANNEL_PROFILE.default_variant;
         if (variantName && CHANNEL_PROFILE.variants[variantName]) {
             target = CHANNEL_PROFILE.variants[variantName];
         }
+    }
+    if (acceptedSizes && acceptedSizes.length > 0) {
+        var acceptedLabels = [];
+        for (var acceptedIndex = 0; acceptedIndex < acceptedSizes.length; acceptedIndex++) {
+            var accepted = acceptedSizes[acceptedIndex];
+            if (!accepted || !accepted.width || !accepted.height) { continue; }
+            acceptedLabels.push(accepted.width + "x" + accepted.height);
+            if (width === accepted.width && height === accepted.height) {
+                return;
+            }
+        }
+        throw new Error("E_SIZE_MISMATCH: 模板尺寸 " + width + "x" + height + "，profile 允许 " + acceptedLabels.join("、"));
     }
     if (target && (width !== target.width || height !== target.height)) {
         throw new Error("E_SIZE_MISMATCH: 模板尺寸 " + width + "x" + height + "，profile 要求 " + target.width + "x" + target.height);
@@ -1218,6 +1948,9 @@ function statusFor(result) {
         return "字段为空";
     }
     if (result.preflightIssue) {
+        return "需复核";
+    }
+    if (result.optionalImageMissing) {
         return "需复核";
     }
     if (result.textOverflow) {
