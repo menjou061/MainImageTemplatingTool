@@ -74,12 +74,14 @@ foreach ($relativePath in @(
     'L0_Start.cmd',
     '_internal\L0_Run.bat',
     '_internal\L0_Run.ps1',
-    '_internal\runtime\python\python.exe',
-    '示例文件\表格案例_618正式主图.xlsx'
+    '_internal\runtime\python\python.exe'
 )) {
     if (-not (Test-Path -LiteralPath (Join-Path $toolRoot $relativePath) -PathType Leaf)) {
         throw "Release ZIP 缺少交付文件：$relativePath"
     }
+}
+if (@($entries | Where-Object { $_.FullName -match '\\示例文件\\|\\标准模板归档\\' -or $_.Extension -in @('.xlsx', '.psd') }).Count -gt 0) {
+    throw 'Release ZIP 不应包含标准 Excel、PSD 或示例素材；请从飞书渠道说明下载。'
 }
 
 foreach ($launcherPath in @(

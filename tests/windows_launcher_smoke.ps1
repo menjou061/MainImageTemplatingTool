@@ -84,7 +84,7 @@ try {
     if (-not $nextButton) { throw '品类渠道选择页缺少下一步按钮。' }
     $nextButton.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
 
-    $mainWindow = Wait-DesktopWindow -Title '电商主图套版工具 1.2'
+    $mainWindow = Wait-DesktopWindow -Title '电商主图套版工具 1.4'
     $startupHint = Get-Control -Root $mainWindow -Name '请先启动并登录 Photoshop，进入首页后再选择商品表格和 PSD 模板。' -ControlType ([System.Windows.Automation.ControlType]::Text)
     if (-not $startupHint) { throw '初始页缺少 Photoshop 启动提醒。' }
 

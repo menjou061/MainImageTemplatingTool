@@ -21,7 +21,13 @@ SCRIPT_DIR = str(Path(__file__).resolve().parent)
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
-from channel_profile import ProfileError, get_profile, map_vertical_headers
+from channel_profile import (
+    ProfileError,
+    get_profile,
+    get_variant_for_sheet,
+    map_vertical_headers,
+    resolve_field_name,
+)
 
 
 NAME_MAP = {
@@ -34,11 +40,13 @@ NAME_MAP = {
     "大尺寸": "大尺寸图",
     "DT17090-24旧": "旧包装图",
     "正式618新旧包装底": "新旧包装底图",
+    "官宣新旧包装底": "新旧包装底图",
 }
 REQUIRED_IMAGE_FIELDS = {"商品图"}
 REQUIRED_RECORD_FIELDS = {"活动时间", "到手", "卖点", "规格"}
 STANDARD_COLUMNS = [
     "商品文件名",
+    "货号",
     "商品图",
     "折扣",
     "券名",
@@ -75,11 +83,22 @@ LEGACY_RECORD_ROW_HEADERS = [
     "活动", "系列", "主卖点", "备注", "时间", "堆品路径", "片数",
     "主推数", "价格条", "赠品路径", "赠品文案", "代言IP路径",
 ]
+LEGACY_RECORD_ROW_HEADERS_WITHOUT_NOTE = [
+    header for header in LEGACY_RECORD_ROW_HEADERS if header != "备注"
+]
 STANDARD_RECORD_ROW_HEADERS = [
     "渠道", "是否出图", "输出规格", "输出文件名", "商品SKU", "商品系列",
     "模板版式", "产品图路径", "代言人素材路径", "主卖点", "到手套数文案", "到手数量",
     "到手价", "活动价", "商品券金额", "官方立减金额", "官方立减文案", "活动时间",
     "赠品版式", "赠品文案", "赠品素材路径", "赠品说明", "设计备注", "检查状态",
+]
+# v1.3 is canonical-first: these visible headers are the same names used by
+# PSD tokens after removing @, !, or #.  The older operational row remains
+# supported above as an alias-only input format.
+CANONICAL_RECORD_ROW_HEADERS = [
+    "渠道", "是否出图", "输出规格", "商品文件名", "货号", "系列", "版式组", "商品图",
+    "代言IP", "卖点", "片数套", "片数数量", "到手", "价格活动价", "价格优惠券", "价格立减",
+    "价格立减副标", "活动时间", "赠品区域", "赠品文案", "赠品素材路径", "赠品说明", "备注", "检查状态",
 ]
 # Kept for callers and fixtures created against the first record-row draft.
 RECORD_ROW_HEADERS = LEGACY_RECORD_ROW_HEADERS
@@ -115,10 +134,10 @@ def looks_like_vertical_header(value: Any) -> bool:
     return text in {"变量名称", "图片目录路径", "图片路径", "图片文件路径", "商品图", "商品图片"} or text.startswith("变量")
 
 
-def is_vertical_layout(ws) -> bool:
+def is_vertical_layout(ws, profile: dict[str, Any] | None = None) -> bool:
     headers = {as_text(ws.cell(1, column).value) for column in range(1, ws.max_column + 1)}
-    if "文件名称" in headers and any(
-        header in headers for header in ("产品（精确到图片名）", "产品图路径", "图片目录路径")
+    if any(header in headers for header in ("文件名称", "商品文件名", "SKU", "变量名称")) and any(
+        header in headers for header in ("产品（精确到图片名）", "产品图路径", "图片目录路径", "产品", "商品图")
     ):
         return ws.max_row >= 2 and ws.max_column >= 2
     row_score = sum(
@@ -156,6 +175,17 @@ def normalize_image_reference(value: str) -> str:
         mounted = "/Volumes/个护设计中心/" + suffix
         if os.path.isfile(mounted):
             return mounted
+    return text
+
+
+def normalize_optional_ip_reference(value: Any) -> str:
+    """Treat empty/non-file placeholders as an omitted optional IP asset."""
+    text = normalize_image_reference(value)
+    if is_blank(text):
+        return ""
+    basename = image_basename(text).lower()
+    if not re.search(r"\.(?:png|jpe?g|webp|psd|tiff?)$", basename):
+        return ""
     return text
 
 
@@ -201,6 +231,8 @@ def evaluate_concat_formula(formula: Any, ws_values, row: int, column: int) -> s
 def is_absolute_material_path(value: str) -> bool:
     text = as_text(value)
     return (
+        text.startswith("/")
+        or
         text.startswith("\\\\")
         or text.startswith("//")
         or bool(re.match(r"^[A-Za-z]:[\\/]", text))
@@ -301,13 +333,22 @@ def source_variables(ws, layout: str = "horizontal", profile: dict[str, Any] | N
         # These are worksheet notes, not data fields for a product row.
         if raw_name.startswith("\\\\") or raw_name.startswith("//"):
             continue
-        name = (profile or {}).get("mapping", {}).get(raw_name, field_name(raw_name))
+        if profile:
+            name, _ = resolve_field_name(raw_name, profile)
+        else:
+            name = field_name(raw_name)
         validate_variable_name(name)
         variables.append((row, name))
     return variables
 
 
-def row_from_column(ws, column: int, variables: list[tuple[int, str]], ws_values=None) -> dict[str, str]:
+def row_from_column(
+    ws,
+    column: int,
+    variables: list[tuple[int, str]],
+    ws_values=None,
+    data_fields_optional: bool = False,
+) -> dict[str, str]:
     row: dict[str, str] = {}
     for source_row, target_name in variables:
         value = ws.cell(source_row, column).value
@@ -332,7 +373,8 @@ def row_from_column(ws, column: int, variables: list[tuple[int, str]], ws_values
     else:
         row["优惠券开关"] = "是"
         if not all(filled):
-            row["预检异常"] = append_issue(row.get("预检异常", ""), "字段为空")
+            issue_key = "预检提醒" if data_fields_optional else "预检异常"
+            row[issue_key] = append_issue(row.get(issue_key, ""), "字段为空")
 
     return row
 
@@ -415,35 +457,89 @@ def split_lines(value: Any, limit: int | None = None) -> list[str]:
     return lines if limit is None else lines[:limit]
 
 
+def split_selling_copy(value: Any, explicit_note: Any = "") -> tuple[str, str]:
+    """Keep the headline on the first line and move a starred footnote to 备注."""
+    lines = split_lines(value)
+    note = as_text(explicit_note)
+    if not lines:
+        return "", note
+    if not note:
+        note = next((line for line in lines[1:] if line.startswith(("*", "＊"))), "")
+    return lines[0], note
+
+
+def resolve_static_layout(profile: dict[str, Any], candidates: list[Any]) -> str:
+    configured = profile.get("record_layout", {}).get("groups", [])
+    configured_names = {as_text(name): as_text(name) for name in configured}
+    normalized = [as_text(value) for value in candidates if not is_blank(value)]
+    for value in normalized:
+        if value in configured_names:
+            return configured_names[value]
+    return normalized[0] if normalized else ""
+
+
 def price_text(value: Any, *, currency: bool = False) -> str:
     text = as_text(value).replace("￥", "").replace("¥", "")
     return ("¥" + text) if currency and text else text
 
 
+def first_value(values: dict[str, str], *names: str) -> str:
+    """Read a canonical v1.3 value first, then its legacy table aliases."""
+    for name in names:
+        if name in values:
+            return values[name]
+    return ""
+
+
+def preserve_dynamic_record_fields(record: dict[str, str], values: dict[str, str], profile: dict[str, Any]) -> None:
+    """Pass declared and additive v1.3 columns through without script rules.
+
+    Row records still derive prices and gift slots from their legacy columns.
+    This pass keeps any extra same-name field (for example ``价格3``) in the
+    generated CSV so the JSX token scanner can bind it directly.
+    """
+    for header, value in values.items():
+        if is_blank(header):
+            continue
+        output_key, definition = resolve_field_name(header, profile)
+        if not definition and not profile.get("matching", {}).get("allow_unknown_fields"):
+            continue
+        if output_key not in record:
+            record[output_key] = value
+
+
 def row_from_standard_record(
-    values: dict[str, str], variant: str, output_label: str | None = None, gift_slot_count: int = 3
+    values: dict[str, str],
+    variant: str,
+    output_label: str | None = None,
+    *,
+    static_support_art: bool = False,
 ) -> dict[str, str]:
-    gift_paths = split_lines(values.get("赠品素材路径", ""))
-    gift_copy = split_lines(values.get("赠品文案", ""))
+    gift_paths = [] if static_support_art else split_lines(values.get("赠品素材路径", ""))
+    gift_copy = [] if static_support_art else split_lines(values.get("赠品文案", ""))
+    selling_copy, note = split_selling_copy(
+        first_value(values, "卖点", "主卖点"), first_value(values, "备注", "设计备注")
+    )
     record: dict[str, str] = {
-        "商品文件名": values.get("输出文件名", ""),
-        "系列": values.get("商品系列", ""),
-        "卖点": values.get("主卖点", ""),
-        "备注": values.get("设计备注", ""),
+        "商品文件名": first_value(values, "商品文件名", "输出文件名"),
+        "货号": first_value(values, "货号", "商品SKU"),
+        "系列": first_value(values, "系列", "商品系列"),
+        "卖点": selling_copy,
+        "备注": note,
         "活动时间": values.get("活动时间", ""),
-        "商品图": normalize_image_reference(values.get("产品图路径", "")),
-        "代言IP路径": normalize_image_reference(values.get("代言人素材路径", "")),
-        "片数套": values.get("到手套数文案", ""),
-        "片数数量": values.get("到手数量", ""),
-        "到手": price_text(values.get("到手价", ""), currency=True),
-        "到手标签": values.get("到手套数文案", ""),
-        "价格活动价": price_text(values.get("活动价", "")),
+        "商品图": normalize_image_reference(first_value(values, "商品图", "产品图路径")),
+        "代言IP路径": normalize_optional_ip_reference(first_value(values, "代言IP", "代言人素材路径")),
+        "片数套": first_value(values, "片数套", "到手套数文案"),
+        "片数数量": first_value(values, "片数数量", "到手数量"),
+        "到手": price_text(first_value(values, "到手", "到手价"), currency=True),
+        "到手标签": first_value(values, "到手标签", "片数套", "到手套数文案"),
+        "价格活动价": price_text(first_value(values, "价格活动价", "活动价")),
         "价格活动价副标": "活动价",
-        "价格优惠券": price_text(values.get("商品券金额", "")),
-        "价格优惠券副标": "入会领商品券" if values.get("商品券金额", "") else "",
-        "价格立减": price_text(values.get("官方立减金额", "")),
-        "价格立减副标": values.get("官方立减文案", ""),
-        "版式组": values.get("模板版式", ""),
+        "价格优惠券": price_text(first_value(values, "价格优惠券", "商品券金额")),
+        "价格优惠券副标": "入会领商品券" if first_value(values, "价格优惠券", "商品券金额") else "",
+        "价格立减": price_text(first_value(values, "价格立减", "官方立减金额")),
+        "价格立减副标": first_value(values, "价格立减副标", "官方立减文案"),
+        "版式组": first_value(values, "版式组", "模板版式"),
         "赠品说明": values.get("赠品说明", ""),
         "预检异常": "",
     }
@@ -471,15 +567,15 @@ def row_from_standard_record(
             f"E_CHECK_STATUS_INVALID:检查状态“{check_status or '空'}”不是“可出图”",
         )
     gift_layout = as_text(values.get("赠品版式", ""))
-    if gift_layout:
+    if gift_layout and not static_support_art:
         record["预检异常"] = append_issue(
             record["预检异常"],
             f"E_GIFT_LAYOUT_UNSUPPORTED:暂不支持自动处理赠品版式“{gift_layout}”，请留空",
         )
-    if len(gift_paths) != len(gift_copy) or len(gift_paths) > gift_slot_count:
+    if len(gift_paths) != len(gift_copy) or len(gift_paths) > 3:
         record["预检异常"] = append_issue(
             record["预检异常"],
-            f"E_GIFT_PAIR_MISMATCH:赠品素材与文案数量不一致或超过{gift_slot_count}项",
+            "E_GIFT_PAIR_MISMATCH:赠品素材与文案数量不一致或超过3项",
         )
     for index in range(3):
         record[f"赠品图{index + 1}"] = normalize_image_reference(gift_paths[index]) if index < len(gift_paths) else ""
@@ -487,31 +583,34 @@ def row_from_standard_record(
     return record
 
 
-def row_from_record(ws, row_number: int, headers: list[str], gift_slot_count: int = 3) -> dict[str, str]:
+def row_from_record(
+    ws, row_number: int, headers: list[str], *, static_support_art: bool = False
+) -> dict[str, str]:
     values = {headers[index]: as_text(ws.cell(row_number, index + 1).value) for index in range(len(headers))}
+    selling_copy, note = split_selling_copy(values.get("主卖点", ""), values.get("备注", ""))
     record: dict[str, str] = {
         "活动": values.get("活动", ""),
         "系列": values.get("系列", ""),
-        "卖点": values.get("主卖点", "").strip(),
-        "备注": values.get("备注", "").strip(),
+        "卖点": selling_copy,
+        "备注": note,
         "活动时间": values.get("时间", ""),
         "商品图": normalize_image_reference(values.get("堆品路径", "")),
         "主推数": values.get("主推数", ""),
-        "代言IP路径": normalize_image_reference(values.get("代言IP路径", "")),
+        "代言IP路径": normalize_optional_ip_reference(values.get("代言IP路径", "")),
     }
     record["代言IP"] = record["代言IP路径"]
     record.update(split_piece_count(values.get("片数", "")))
     record.update(split_price_bar(values.get("价格条", "")))
-    gift_paths = split_lines(values.get("赠品路径", ""))
-    gift_copy = split_lines(values.get("赠品文案", ""))
-    if len(gift_paths) != len(gift_copy) or len(gift_paths) > gift_slot_count:
-        record["预检异常"] = f"E_GIFT_PAIR_MISMATCH:赠品素材与文案数量不一致或超过{gift_slot_count}项"
+    gift_paths = [] if static_support_art else split_lines(values.get("赠品路径", ""))
+    gift_copy = [] if static_support_art else split_lines(values.get("赠品文案", ""))
+    if len(gift_paths) != len(gift_copy) or len(gift_paths) > 3:
+        record["预检异常"] = "E_GIFT_PAIR_MISMATCH:赠品素材与文案数量不一致或超过3项"
     for index in range(3):
         record[f"赠品图{index + 1}"] = normalize_image_reference(gift_paths[index]) if index < len(gift_paths) else ""
         record[f"赠品文案{index + 1}"] = gift_copy[index] if index < len(gift_copy) else ""
-    # Activity and series are intentionally metadata only. The layout selector
-    # follows the approved path rule and is recorded for the PSD task report.
-    record["版式组"] = "小马无侧边" if "(IP)" in record.get("商品图", "") or "（IP）" in record.get("商品图", "") else "无代言人"
+    # SKU, activity and series are metadata only. Layout selection is supplied
+    # by the profile; the product composition itself always comes from the row path.
+    record["版式组"] = ""
     record["价格优惠券开关"] = "是" if record.get("价格优惠券") else "否"
     record["价格立减开关"] = "是" if record.get("价格立减") else "否"
     return record
@@ -525,35 +624,55 @@ def quality_score(record: dict[str, str]) -> int:
     return sum(1 for key, value in record.items() if key not in {"预检异常", "优惠券开关"} and not is_blank(value))
 
 
-def add_material_precheck(record: dict[str, str], image_fields: set[str] | None = None) -> None:
+def add_material_precheck(
+    record: dict[str, str],
+    image_fields: set[str] | None = None,
+    *,
+    warning: bool = False,
+) -> None:
     """Validate each Excel-provided image address without scanning a folder."""
-    for field in image_fields or REQUIRED_IMAGE_FIELDS:
+    fields = REQUIRED_IMAGE_FIELDS if image_fields is None else image_fields
+    issue_key = "预检提醒" if warning else "预检异常"
+    for field in fields:
         image_path = as_text(record.get(field, ""))
         if is_disabled_image(image_path):
             if field == "商品图":
-                record["预检异常"] = append_issue(record.get("预检异常", ""), "素材地址缺失:商品图")
+                record[issue_key] = append_issue(record.get(issue_key, ""), "素材地址缺失:商品图")
             continue
         if not is_absolute_material_path(image_path):
-            record["预检异常"] = append_issue(record.get("预检异常", ""), f"素材地址缺失:{field}")
+            record[issue_key] = append_issue(record.get(issue_key, ""), f"素材地址缺失:{field}")
             continue
         if not material_exists(image_path):
-            record["预检异常"] = append_issue(record.get("预检异常", ""), f"缺图:{field}")
+            record[issue_key] = append_issue(record.get(issue_key, ""), f"缺图:{field}")
 
 
-def add_required_field_precheck(record: dict[str, str], required_fields: set[str] | None = None) -> None:
+def add_required_field_precheck(
+    record: dict[str, str],
+    required_fields: set[str] | None = None,
+    *,
+    warning: bool = False,
+) -> None:
     required = required_fields if required_fields is not None else REQUIRED_RECORD_FIELDS
     missing = [field for field in required if is_blank(record.get(field, ""))]
     if missing:
-        record["预检异常"] = append_issue(record.get("预检异常", ""), "字段为空:" + "、".join(sorted(missing)))
+        issue_key = "预检提醒" if warning else "预检异常"
+        record[issue_key] = append_issue(record.get(issue_key, ""), "字段为空:" + "、".join(sorted(missing)))
 
 
-def add_filename_precheck(record: dict[str, str], image_fields: set[str] | None = None) -> None:
-    for field in image_fields or REQUIRED_IMAGE_FIELDS:
+def add_filename_precheck(
+    record: dict[str, str],
+    image_fields: set[str] | None = None,
+    *,
+    warning: bool = False,
+) -> None:
+    fields = REQUIRED_IMAGE_FIELDS if image_fields is None else image_fields
+    issue_key = "预检提醒" if warning else "预检异常"
+    for field in fields:
         image_name = image_basename(record.get(field, ""))
         if is_disabled_image(image_name):
             continue
         if "m²" in image_name or "²" in image_name:
-            record["预检异常"] = append_issue(record.get("预检异常", ""), f"文件名特殊字符:{field}")
+            record[issue_key] = append_issue(record.get(issue_key, ""), f"文件名特殊字符:{field}")
 
 
 def exception_record(record: dict[str, str], product: str, column: int, issue: str, detail: str) -> dict[str, str]:
@@ -574,6 +693,10 @@ def exception_record(record: dict[str, str], product: str, column: int, issue: s
         "E_RECORD_KEY_MISSING": "填写唯一的输出文件名。",
         "E_RECORD_KEY_DUPLICATE": "每行使用不同的输出文件名，避免成品互相覆盖。",
         "E_CHANNEL_MISMATCH": "把该行“渠道”改为当前所选渠道，或返回工具选择匹配的品类和渠道。",
+        "E_OUTPUT_SPEC_MISSING": "填写与当前模板一致的输出规格，例如 750。",
+        "E_OUTPUT_SPEC_MISMATCH": "将输出规格改为当前选择模板的规格后重跑。",
+        "E_CHECK_STATUS_INVALID": "将检查状态改为“可出图”后重跑。",
+        "E_GIFT_LAYOUT_UNSUPPORTED": "三栏会员模板使用固定赠品版式，赠品版式字段请留空。",
     }
     result.update({
         "商品文件名": product,
@@ -603,12 +726,20 @@ def build_record_rows(
     header_row = int(profile.get("sheet", {}).get("header_row", 1))
     headers = [as_text(ws.cell(header_row, column).value) for column in range(1, ws.max_column + 1)]
     header_set = set(headers)
-    if set(STANDARD_RECORD_ROW_HEADERS).issubset(header_set):
+    if set(CANONICAL_RECORD_ROW_HEADERS).issubset(header_set):
+        schema = "standard"
+        required_headers = set(CANONICAL_RECORD_ROW_HEADERS)
+    elif set(STANDARD_RECORD_ROW_HEADERS).issubset(header_set):
         schema = "standard"
         required_headers = set(STANDARD_RECORD_ROW_HEADERS)
     elif set(LEGACY_RECORD_ROW_HEADERS).issubset(header_set):
         schema = "legacy"
         required_headers = set(LEGACY_RECORD_ROW_HEADERS)
+    elif set(LEGACY_RECORD_ROW_HEADERS_WITHOUT_NOTE).issubset(header_set):
+        # Older operator workbooks omit the separate 备注 column and put a
+        # starred footnote on a second line of 主卖点.
+        schema = "legacy"
+        required_headers = set(LEGACY_RECORD_ROW_HEADERS_WITHOUT_NOTE)
     else:
         configured_sets = profile.get("sheet", {}).get("required_header_sets", [])
         candidates = [set(items) for items in configured_sets] or [set(LEGACY_RECORD_ROW_HEADERS), set(STANDARD_RECORD_ROW_HEADERS)]
@@ -618,12 +749,23 @@ def build_record_rows(
     missing = sorted(required_headers - header_set)
     if missing:
         raise ProfileError("E_PROFILE_SCHEMA_MISMATCH", "缺少列：" + "、".join(missing))
-    required_fields = set(profile.get("record_required_fields", [
+    configured_required_fields = set(profile.get("record_required_fields", [
         "活动时间", "卖点", "片数套", "片数数量", "到手", "价格活动价",
     ]))
-    gift_slot_count = int(profile.get("record_layout", {}).get("gift_slots", 3))
-    if gift_slot_count < 1 or gift_slot_count > 3:
-        raise ProfileError("E_CONFIG_MISMATCH", "赠品槽位数必须在 1 到 3 之间")
+    optional_image_fields = {
+        str(name)
+        for name in profile.get("optional_psd_variables", [])
+        if not is_blank(name)
+    }
+    configured_image_fields = {
+        variable["name"]
+        for variable in profile.get("required_psd_variables", [])
+        if variable.get("type") == "smart_object"
+        and str(variable.get("name", "")) not in optional_image_fields
+    } or {"商品图"}
+    data_fields_optional = bool(profile.get("data_fields_optional", False))
+    required_fields = set() if data_fields_optional else configured_required_fields
+    static_support_art = bool(profile.get("static_support_art") or profile.get("static_product_art"))
     records: list[dict[str, str]] = []
     record_source_rows: list[int] = []
     seen_products: dict[str, int] = {}
@@ -638,8 +780,9 @@ def build_record_rows(
                 values,
                 str(profile["variant"]),
                 str(profile.get("output_label", "")),
-                gift_slot_count,
+                static_support_art=static_support_art,
             )
+            preserve_dynamic_record_fields(record, values, profile)
             if record.pop("_跳过", ""):
                 continue
             expected_channel = as_text(profile.get("channel", ""))
@@ -653,10 +796,21 @@ def build_record_rows(
                 record["预检异常"] = append_issue(channel_issue, existing_issue) if existing_issue else channel_issue
             product = record.get("商品文件名", "")
         else:
-            record = row_from_record(ws, row_number, headers, gift_slot_count)
+            record = row_from_record(ws, row_number, headers, static_support_art=static_support_art)
+            values = {headers[index]: as_text(ws.cell(row_number, index + 1).value) for index in range(len(headers))}
+            preserve_dynamic_record_fields(record, values, profile)
             activity = record.get("活动", "") or "未命名活动"
             series = record.get("系列", "") or "未命名系列"
             product = f"{activity}_{series}_{row_number - header_row:02d}"
+        if profile.get("static_product_art"):
+            product_stem = Path(image_basename(record.get("商品图", ""))).stem
+            layout_candidates = [record.get("版式组", "")]
+            if schema == "standard":
+                layout_candidates.extend([values.get("商品SKU", ""), product])
+            layout_candidates.append(product_stem)
+            record["版式组"] = resolve_static_layout(profile, layout_candidates)
+        elif len(profile.get("record_layout", {}).get("groups", [])) == 1:
+            record["版式组"] = profile["record_layout"]["groups"][0]
         record["商品文件名"] = product
         record["profile_id"] = profile["profile_id"]
         record["profile_version"] = profile["profile_version"]
@@ -673,17 +827,14 @@ def build_record_rows(
             )
         else:
             seen_products[product] = row_number
-        if is_blank(record.get("商品图")):
-            record["预检异常"] = append_issue(record.get("预检异常", ""), "素材地址缺失:商品图")
-        elif not material_exists(record["商品图"]):
-            record["预检异常"] = append_issue(record.get("预检异常", ""), "缺图:商品图")
-        for index in range(1, 4):
-            gift_path = record.get(f"赠品图{index}", "")
-            if gift_path and not material_exists(gift_path):
-                record["预检异常"] = append_issue(record.get("预检异常", ""), f"缺图:赠品图{index}")
-        missing_fields = [field for field in sorted(required_fields) if is_blank(record.get(field, ""))]
-        if missing_fields:
-            record["预检异常"] = append_issue(record.get("预检异常", ""), "字段为空:" + "、".join(missing_fields))
+        if data_fields_optional:
+            add_filename_precheck(record, configured_image_fields, warning=True)
+            add_material_precheck(record, configured_image_fields, warning=True)
+            add_required_field_precheck(record, configured_required_fields, warning=True)
+        else:
+            add_filename_precheck(record, configured_image_fields)
+            add_material_precheck(record, configured_image_fields)
+            add_required_field_precheck(record, required_fields)
         if record.get("备注") and not record["备注"].startswith("*"):
             record["预检提醒"] = "备注建议以*开头"
         records.append(record)
@@ -744,37 +895,44 @@ def build_data(
     if ws.sheet_state != "visible" or ws.title == "WpsReserved_CellImgList":
         raise ValueError("不能处理隐藏 Sheet 或 WPS 内嵌图片索引 Sheet。")
     profile = get_profile(profile_id, variant)
-    layout = "vertical" if is_vertical_layout(ws) else "horizontal"
+    if variant is None:
+        inferred_variant = get_variant_for_sheet(profile, sheet_name)
+        if inferred_variant and inferred_variant != profile.get("variant"):
+            profile = get_profile(profile_id, inferred_variant)
+    layout = "vertical" if is_vertical_layout(ws, profile) else "horizontal"
     if profile.get("layout") == "record_rows":
         return build_record_rows(ws, output_dir, product_filter, limit, profile)
     if layout != profile["layout"]:
         raise ProfileError("E_PROFILE_SCHEMA_MISMATCH", f"profile {profile['profile_id']} 不支持此 Sheet 布局")
     variables = source_variables(ws, layout, profile)
+    data_fields_optional = bool(profile.get("data_fields_optional", False))
     if profile.get("execution_mode") == "photoshop_variables":
-        required_fields = {
+        configured_required_fields = {
             variable["name"]
             for variable in profile.get("required_psd_variables", [])
             if variable.get("type") == "text"
         }
-        required_image_fields = {
+        configured_image_fields = {
             variable["name"]
             for variable in profile.get("required_psd_variables", [])
             if variable.get("type") == "pixel_replacement"
         }
     else:
         if layout == "horizontal":
-            required_fields = REQUIRED_RECORD_FIELDS
+            configured_required_fields = REQUIRED_RECORD_FIELDS
         else:
-            required_fields = {
+            configured_required_fields = {
                 variable["name"]
                 for variable in profile.get("required_psd_variables", [])
                 if variable.get("type") == "text"
             } or {"预估到手价", "卖点", "规格"}
-        required_image_fields = {
+        configured_image_fields = {
             variable["name"]
             for variable in profile.get("required_psd_variables", [])
             if variable.get("type") == "smart_object"
         } or REQUIRED_IMAGE_FIELDS
+    required_fields = set() if data_fields_optional else configured_required_fields
+    required_image_fields = set() if data_fields_optional else configured_image_fields
     # Keep every selected product candidate, including records with preflight
     # issues.  The UI can later let the designer choose either the clean set or
     # the original-content set without reconstructing rows from an exception
@@ -783,14 +941,18 @@ def build_data(
     exceptions: list[dict[str, str]] = []
     if layout == "vertical":
         sku_header = profile.get("sheet", {}).get("sku_header")
+        sku_headers = [sku_header] if sku_header else []
+        sku_headers.extend(profile.get("sheet", {}).get("sku_header_aliases", []) or [])
+        sku_target = resolve_field_name(sku_header, profile)[0] if sku_header else "商品文件名"
         sku_column = 1
-        if sku_header:
+        if sku_headers:
             for column in range(1, ws.max_column + 1):
-                if as_text(ws.cell(1, column).value) == sku_header:
+                header = as_text(ws.cell(1, column).value)
+                if header in sku_headers or resolve_field_name(header, profile)[0] == sku_target:
                     sku_column = column
                     break
             else:
-                raise ProfileError("E_PROFILE_SCHEMA_MISMATCH", f"缺少 SKU 列：{sku_header}")
+                raise ProfileError("E_PROFILE_SCHEMA_MISMATCH", f"缺少 SKU 列：{sku_header or '商品文件名'}")
         source_items = ((row, as_text(ws_values.cell(row, sku_column).value)) for row in range(2, ws.max_row + 1))
     else:
         source_items = ((column, as_text(ws_values.cell(1, column).value)) for column in range(2, ws.max_column + 1))
@@ -803,7 +965,7 @@ def build_data(
         if layout == "vertical":
             record = row_from_vertical(ws, ws_values, source_index, variables)
         else:
-            record = row_from_column(ws, source_index, variables, ws_values)
+            record = row_from_column(ws, source_index, variables, ws_values, data_fields_optional)
         record["商品文件名"] = product
         record["profile_id"] = profile["profile_id"]
         record["profile_version"] = profile["profile_version"]
@@ -811,12 +973,17 @@ def build_data(
         if has_newline(raw_product):
             record["预检异常"] = append_issue(record.get("预检异常", ""), "脏数据")
             exceptions.append(exception_record(record, product, source_index, "脏数据", "商品文件名包含换行符"))
-        add_filename_precheck(record, required_image_fields)
-        add_material_precheck(record, required_image_fields)
-        add_required_field_precheck(record, required_fields)
+        if data_fields_optional:
+            add_filename_precheck(record, configured_image_fields, warning=True)
+            add_material_precheck(record, configured_image_fields, warning=True)
+            add_required_field_precheck(record, configured_required_fields, warning=True)
+        else:
+            add_filename_precheck(record, required_image_fields)
+            add_material_precheck(record, required_image_fields)
+            add_required_field_precheck(record, required_fields)
         if "脏数据" in record.get("预检异常", "") and not has_newline(raw_product):
             exceptions.append(exception_record(record, product, source_index, "脏数据", "任一单元格包含换行符"))
-        price_error = price_format_error(record)
+        price_error = "" if data_fields_optional else price_format_error(record)
         if price_error:
             record["预检异常"] = append_issue(record.get("预检异常", ""), "价格格式异常")
             exceptions.append(exception_record(record, product, source_index, "价格格式异常", price_error))

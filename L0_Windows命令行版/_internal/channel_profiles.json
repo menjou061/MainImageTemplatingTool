@@ -1,10 +1,760 @@
 {
-  "schema_version": "1.2.0",
+  "schema_version": "1.3.0",
   "profiles": [
-    {"profile_id":"legacy-v1","profile_version":"1.0.0","status":"enabled","category":"纸品","channel":"京东自营","execution_mode":"legacy_layer_names","layout":"horizontal","variants":{"main-800":{"width":800,"height":800,"template_id":"paper-jd-self-main-800-v1"}},"default_variant":"main-800","sheet":{"selection":"explicit_or_visible"},"mapping":{"文件名":"商品文件名","时间":"活动时间","满129可用":"券门槛","价格一":"价格1","价格二":"价格2","堆图":"商品图","大尺寸":"大尺寸图","DT17090-24旧":"旧包装图","正式618新旧包装底":"新旧包装底图"},"optional_psd_variables":["券名","折扣","券门槛"],"required_psd_variables":[{"name":"卖点","type":"text"},{"name":"规格","type":"text"},{"name":"到手","type":"text"},{"name":"价格1","type":"text"},{"name":"价格2","type":"text"},{"name":"券名","type":"text"},{"name":"折扣","type":"text"},{"name":"券门槛","type":"text"},{"name":"活动时间","type":"text"},{"name":"商品图","type":"smart_object"}]},
-    {"profile_id":"tmall-positional-v1","profile_version":"1.1.0","status":"enabled","category":"纸品","channel":"天猫官旗","execution_mode":"legacy_layer_names","layout":"vertical","variant_selection":"sheet","default_variant":"main-800","sheet":{"required_headers":["变量名称","变量01","变量02","变量03","变量04","变量05","变量06","变量07","图片目录路径"],"sku_header":"变量名称"},"mapping":{"SKU":"文件名称","变量01":"利益点1","变量02":"利益点2","变量03":"预估到手价","变量04":"价格1","变量05":"价格2","变量06":"规格","变量07":"卖点","图片目录路径":"产品"},"ignored_headers":["变量08","变量09"],"text_fit":{"keys":["利益点1","利益点2"],"minimum_scale":0.65},"required_psd_variables":[{"name":"利益点1","type":"text"},{"name":"利益点2","type":"text"},{"name":"预估到手价","type":"text"},{"name":"价格1","type":"text"},{"name":"价格2","type":"text"},{"name":"规格","type":"text"},{"name":"卖点","type":"text"},{"name":"产品","type":"smart_object"}],"variants":{"main-800":{"width":1440,"height":1440,"template_id":"paper-tmall-main-800-v1","sheet_name":"现货-800","template_bindings":{"利益点1":"买1减16","利益点2":"买2减36","预估到手价":"2件预估均价","价格1":"71","价格2":".9","规格":"茶语卷纸4层200克27卷","卖点":"200克大胖纸 大卷更耐用","产品":"产品"}},"main-750":{"width":1440,"height":1920,"template_id":"paper-tmall-main-750-v1","sheet_name":"现货-750","template_bindings":{"利益点1":"买1减16","利益点2":"买2减36","预估到手价":"2件预估均价","价格1":"71","价格2":".9","规格":"茶语卷纸4层200克27卷","卖点":"200克大胖纸 大卷更耐用","产品":"DT17100-20"}}},"approval_note":"按所选运营 Sheet 匹配对应规格和 PSD；每次只生成当前 Sheet，750 和 800 任务相互独立。"},
-    {"profile_id":"jd-main-800-v1","profile_version":"1.1.0","status":"pending_asset_approval","execution_mode":"legacy_layer_names","layout":"horizontal","variants":{"main-800":{"width":800,"height":800}},"default_variant":"main-800","approval_note":"京东自营第一版由 legacy-v1/main-800 兼容运行；此新 profile 等待已确认的渠道表与 PSD 资产，禁止自动选择或导出。"},
-    {"profile_id":"hygiene-tmall-v1.2","profile_version":"1.2.0","status":"enabled","execution_mode":"legacy_layer_names","layout":"record_rows","record_key":"商品文件名","category":"卫品","channel":"天猫官旗","variant_selection":"sheet","variants":{"main-750":{"width":750,"height":1000,"template_id":"hygiene-tmall-main-750-v1","output_label":"750"},"main-800":{"width":750,"height":750,"template_id":"hygiene-tmall-main-800-v1","output_label":"800","record_layout":{"groups":["无代言人"],"group_selector":"800 标准模板固定使用无代言人版式","price_formula":"到手价=活动价-可选商品券-可选官方立减；依次写入原 PSD 的公式/1、公式/2、公式/3 和组 359","gift_slots":2,"gift_layout":"two_top_cards","gift_switches":["赠品槽位1","赠品槽位2"],"gift_pairs":"赠品路径与赠品文案按换行序号一一对应：两项均为独立顶部赠品卡；最多2项","empty_optional":"备注、代言IP路径、商品券、官方立减为空时隐藏"}}},"default_variant":"main-750","sheet":{"selection":"explicit","required_headers":["渠道","是否出图","输出规格","输出文件名","商品SKU","商品系列","模板版式","产品图路径","代言人素材路径","主卖点","到手套数文案","到手数量","到手价","活动价","商品券金额","官方立减金额","官方立减文案","活动时间","赠品版式","赠品文案","赠品素材路径","赠品说明","设计备注","检查状态"],"required_header_sets":[["活动","系列","主卖点","备注","时间","堆品路径","片数","主推数","价格条","赠品路径","赠品文案","代言IP路径"],["渠道","是否出图","输出规格","输出文件名","商品SKU","商品系列","模板版式","产品图路径","代言人素材路径","主卖点","到手套数文案","到手数量","到手价","活动价","商品券金额","官方立减金额","官方立减文案","活动时间","赠品版式","赠品文案","赠品素材路径","赠品说明","设计备注","检查状态"]]},"mapping":{"legacy":{"活动":"活动","系列":"系列","主卖点":"卖点","备注":"备注","时间":"活动时间","堆品路径":"商品图","片数":"片数","价格条":"价格条"},"standard":{"输出文件名":"商品文件名","产品图路径":"商品图","主卖点":"卖点","到手套数文案":"片数套","到手数量":"片数数量","到手价":"到手","活动价":"价格活动价","商品券金额":"价格优惠券","官方立减金额":"价格立减","模板版式":"版式组"}},"record_required_fields":["活动时间","卖点","片数套","片数数量","到手","价格活动价"],"required_psd_variables":[{"name":"商品图","type":"smart_object"},{"name":"卖点","type":"text"},{"name":"备注","type":"text"},{"name":"片数套","type":"text"},{"name":"片数数量","type":"text"},{"name":"到手标签","type":"text"},{"name":"到手","type":"text"},{"name":"价格活动价","type":"text"},{"name":"价格活动价副标","type":"text"},{"name":"价格优惠券","type":"text"},{"name":"价格优惠券副标","type":"text"},{"name":"价格立减","type":"text"},{"name":"赠品文案1","type":"text"},{"name":"赠品文案2","type":"text"},{"name":"赠品图1","type":"smart_object"},{"name":"赠品图2","type":"smart_object"}],"record_layout":{"groups":["无代言人"],"group_selector":"750 标准模板固定使用无代言人版式","price_formula":"到手价=活动价-可选商品券-可选官方立减；依次写入原 PSD 的公式/1、公式/2、公式/3 和组 359","gift_slots":2,"gift_layout":"top_and_bottom_cards","gift_switches":["赠品顶部","赠品区域"],"gift_pairs":"赠品路径与赠品文案按换行序号一一对应：第 1 项为顶部卡，第 2 项为下方组合卡；最多2项","empty_optional":"备注、代言IP路径、商品券、官方立减为空时隐藏"},"text_fit":{"keys":["卖点","备注","片数套","片数数量","到手标签","到手","价格活动价","价格活动价副标","价格优惠券","价格优惠券副标","价格立减","赠品文案1","赠品文案2"],"minimum_scale":0.72},"approval_note":"卫品+天猫官旗已批准 750x1000 与 750x750（输出规格 800）两个模板；按选中 Sheet 的标准表头识别，Sheet 名称可由业务自定义。"},
-    {"profile_id":"hengan-lifestyle-v1","profile_version":"1.2.0","status":"enabled","category":"纸品","channel":"恒安生活馆","execution_mode":"legacy_layer_names","layout":"vertical","variant_selection":"sheet","default_variant":"main-800","sheet":{"required_headers":["文件名称","规格","利益点(最下面的)","卖点(堆图上面那行卖点)","预估到手价","价格1","价格2","产品（精确到图片名）"],"sku_header":"文件名称"},"mapping":{"文件名称":"商品文件名","规格":"规格","利益点(最下面的)":"利益点1","卖点(堆图上面那行卖点)":"卖点","预估到手价":"预估到手价","价格1":"价格1","价格2":"价格2","产品（精确到图片名）":"产品"},"text_fit":{"keys":["利益点1","卖点","预估到手价","规格"],"minimum_scale":0.65},"required_psd_variables":[{"name":"利益点1","type":"text"},{"name":"卖点","type":"text"},{"name":"预估到手价","type":"text"},{"name":"价格1","type":"text"},{"name":"价格2","type":"text"},{"name":"规格","type":"text"},{"name":"产品","type":"smart_object"}],"variants":{"main-750":{"width":1440,"height":1920,"template_id":"paper-hengan-main-750-v1","sheet_name":"750版新","required_psd_variables":[{"name":"利益点1","type":"text"},{"name":"卖点","type":"text"},{"name":"预估到手价","type":"text"},{"name":"价格1","type":"text"},{"name":"价格2","type":"text"},{"name":"规格","type":"text"},{"name":"产品","type":"smart_object"}],"template_bindings":{"规格":"心相印茶语丝享抽纸S码100抽30包","利益点1":"下拉详情页 抢淘金币补贴","卖点":"原生木浆 柔厚不掉屑","预估到手价":"到手共：","价格1":"30","价格2":"包","产品":"DT17090-24"}},"main-800":{"width":1440,"height":1440,"template_id":"paper-hengan-main-800-v1","sheet_name":"抽纸新","required_psd_variables":[{"name":"利益点1","type":"text"},{"name":"预估到手价","type":"text"},{"name":"价格1","type":"text"},{"name":"价格2","type":"text"},{"name":"规格","type":"text"},{"name":"产品","type":"smart_object"}],"template_bindings":{"规格":"心相印可溶抽纸80抽15包","利益点1":"柔软亲肤 遇水可冲散","预估到手价":"到手共：","价格1":"15","价格2":"包","产品":"DT17090-24"}}},"approval_note":"恒安生活馆纸品模板按运营 Sheet 选择单一规格生成；750 和 800 独立输出，按实际 PSD 尺寸导出。800 模板没有卖点图层，不读取或要求卖点列。"}
+    {
+      "profile_id": "legacy-v1",
+      "profile_version": "1.0.0",
+      "status": "enabled",
+      "category": "纸品",
+      "channel": "京东自营",
+      "execution_mode": "legacy_layer_names",
+      "layout": "horizontal",
+      "matching": {
+        "mode": "field_id_alias",
+        "allow_unknown_fields": true,
+        "layer_prefixes": {
+          "text": "@",
+          "smart_object": "!"
+        }
+      },
+      "fields": [
+        {"field_id":"product_name","label":"商品文件名","output_key":"商品文件名","type":"text","required":true,"aliases":["商品文件名","文件名","文件名称","SKU"]},
+        {"field_id":"main_image","label":"商品图","output_key":"商品图","type":"smart_object","required":true,"aliases":["商品图","堆图","产品","产品图","产品图路径"]},
+        {"field_id":"selling_point","label":"卖点","output_key":"卖点","type":"text","aliases":["卖点","主卖点"]},
+        {"field_id":"specification","label":"规格","output_key":"规格","type":"text","aliases":["规格","商品规格"]},
+        {"field_id":"activity_time","label":"活动时间","output_key":"活动时间","type":"text","aliases":["活动时间","时间"]},
+        {"field_id":"to_hand","label":"到手","output_key":"到手","type":"text","aliases":["到手","到手价"]},
+        {"field_id":"price_1","label":"价格1","output_key":"价格1","type":"text","aliases":["价格1","价格一","价格01","price_1"]},
+        {"field_id":"price_2","label":"价格2","output_key":"价格2","type":"text","aliases":["价格2","价格二","价格02","price_2"]},
+        {"field_id":"price_3","label":"价格3","output_key":"价格3","type":"text","aliases":["价格3","价格三","价格03","price_3"]},
+        {"field_id":"coupon_name","label":"券名","output_key":"券名","type":"text","aliases":["券名","优惠券名称"]},
+        {"field_id":"discount","label":"折扣","output_key":"折扣","type":"text","aliases":["折扣","折扣文案"]},
+        {"field_id":"coupon_threshold","label":"券门槛","output_key":"券门槛","type":"text","aliases":["券门槛","满129可用"]},
+        {"field_id":"large_image","label":"大尺寸图","output_key":"大尺寸图","type":"smart_object","aliases":["大尺寸图","大尺寸"]},
+        {"field_id":"old_package_image","label":"旧包装图","output_key":"旧包装图","type":"smart_object","aliases":["旧包装图","DT17090-24旧"]},
+        {"field_id":"new_package_base","label":"新旧包装底图","output_key":"新旧包装底图","type":"smart_object","aliases":["新旧包装底图","正式618新旧包装底","官宣新旧包装底"]}
+      ],
+      "variants": {
+        "main-800": {
+          "width": 800,
+          "height": 800,
+          "template_id": "paper-jd-self-main-800-v1"
+        }
+      },
+      "default_variant": "main-800",
+      "sheet": {
+        "selection": "explicit_or_visible"
+      },
+      "mapping": {
+        "文件名": "商品文件名",
+        "时间": "活动时间",
+        "满129可用": "券门槛",
+        "价格一": "价格1",
+        "价格二": "价格2",
+        "堆图": "商品图",
+        "大尺寸": "大尺寸图",
+        "DT17090-24旧": "旧包装图",
+        "正式618新旧包装底": "新旧包装底图",
+        "官宣新旧包装底": "新旧包装底图"
+      },
+      "optional_psd_variables": [
+        "券名",
+        "折扣",
+        "券门槛"
+      ],
+      "text_fit": {
+        "keys": [
+          "卖点"
+        ],
+        "minimum_scale": 0.35,
+        "frame_by_key": {
+          "卖点": {
+            "left_ratio": 0.05,
+            "right_ratio": 0.98
+          }
+        }
+      },
+      "required_psd_variables": [
+        {
+          "name": "卖点",
+          "type": "text"
+        },
+        {
+          "name": "规格",
+          "type": "text"
+        },
+        {
+          "name": "到手",
+          "type": "text"
+        },
+        {
+          "name": "价格1",
+          "type": "text"
+        },
+        {
+          "name": "价格2",
+          "type": "text"
+        },
+        {
+          "name": "券名",
+          "type": "text"
+        },
+        {
+          "name": "折扣",
+          "type": "text"
+        },
+        {
+          "name": "券门槛",
+          "type": "text"
+        },
+        {
+          "name": "活动时间",
+          "type": "text"
+        },
+        {
+          "name": "商品图",
+          "type": "smart_object"
+        }
+      ]
+    },
+    {
+      "profile_id": "tmall-positional-v1",
+      "profile_version": "1.3.0",
+      "status": "enabled",
+      "category": "纸品",
+      "channel": "天猫官旗",
+      "execution_mode": "legacy_layer_names",
+      "layout": "vertical",
+      "matching": {
+        "mode": "field_id_alias",
+        "allow_unknown_fields": true,
+        "layer_prefixes": {
+          "text": "@",
+          "smart_object": "!"
+        }
+      },
+      "fields": [
+        {"field_id":"product_name","label":"商品文件名","output_key":"商品文件名","type":"text","required":true,"aliases":["商品文件名","文件名称","文件名","SKU","变量名称"]},
+        {"field_id":"benefit_1","label":"利益点1","output_key":"利益点1","type":"text","aliases":["利益点1","变量01"]},
+        {"field_id":"benefit_2","label":"利益点2","output_key":"利益点2","type":"text","aliases":["利益点2","变量02"]},
+        {"field_id":"estimated_to_hand","label":"预估到手价","output_key":"预估到手价","type":"text","aliases":["预估到手价","到手价","变量03"]},
+        {"field_id":"price_1","label":"价格1","output_key":"价格1","type":"text","aliases":["价格1","价格一","价格01","变量04","price_1"]},
+        {"field_id":"price_2","label":"价格2","output_key":"价格2","type":"text","aliases":["价格2","价格二","价格02","变量05","price_2"]},
+        {"field_id":"price_3","label":"价格3","output_key":"价格3","type":"text","aliases":["价格3","价格三","价格03","变量08","price_3"]},
+        {"field_id":"specification","label":"规格","output_key":"规格","type":"text","aliases":["规格","变量06"]},
+        {"field_id":"selling_point","label":"卖点","output_key":"卖点","type":"text","aliases":["卖点","主卖点","变量07"]},
+        {"field_id":"main_image","label":"商品图","output_key":"商品图","type":"smart_object","aliases":["商品图","产品","产品图","图片目录路径","图片路径","产品图片"]}
+      ],
+      "variant_selection": "sheet",
+      "default_variant": "main-800",
+      "sheet": {
+        "required_headers": [
+          "商品文件名",
+          "利益点1",
+          "利益点2",
+          "预估到手价",
+          "价格1",
+          "价格2",
+          "规格",
+          "卖点",
+          "商品图"
+        ],
+        "sku_header": "变量名称",
+        "sku_header_aliases": ["商品文件名", "SKU", "文件名称", "文件名"]
+      },
+      "mapping": {
+        "SKU": "商品文件名",
+        "变量01": "利益点1",
+        "变量02": "利益点2",
+        "变量03": "预估到手价",
+        "变量04": "价格1",
+        "变量05": "价格2",
+        "变量06": "规格",
+        "变量07": "卖点",
+        "图片目录路径": "商品图"
+      },
+      "ignored_headers": [
+        "变量08",
+        "变量09"
+      ],
+      "text_fit": {
+        "keys": [
+          "利益点1",
+          "利益点2",
+          "价格1"
+        ],
+        "minimum_scale": 0.65,
+        "minimum_scale_by_key": {
+          "价格1": 0.4
+        }
+      },
+      "required_psd_variables": [
+        {
+          "name": "利益点1",
+          "type": "text"
+        },
+        {
+          "name": "利益点2",
+          "type": "text"
+        },
+        {
+          "name": "预估到手价",
+          "type": "text"
+        },
+        {
+          "name": "价格1",
+          "type": "text"
+        },
+        {
+          "name": "价格2",
+          "type": "text"
+        },
+        {
+          "name": "规格",
+          "type": "text"
+        },
+        {
+          "name": "卖点",
+          "type": "text"
+        },
+        {
+          "name": "商品图",
+          "type": "smart_object"
+        }
+      ],
+      "variants": {
+        "main-800": {
+          "width": 1440,
+          "height": 1440,
+          "template_id": "paper-tmall-main-800-v1",
+          "sheet_name": "现货-800",
+          "template_bindings": {
+            "利益点1": "买1减16",
+            "利益点2": "买2减36",
+            "预估到手价": "2件预估均价",
+            "价格1": "71",
+            "价格2": ".9",
+            "规格": "茶语卷纸4层200克27卷",
+            "卖点": "200克大胖纸 大卷更耐用",
+            "商品图": "商品图"
+          }
+        },
+        "main-750": {
+          "width": 1440,
+          "height": 1920,
+          "template_id": "paper-tmall-main-750-v1",
+          "sheet_name": "现货-750",
+          "template_bindings": {
+            "利益点1": "买1减16",
+            "利益点2": "买2减36",
+            "预估到手价": "2件预估均价",
+            "价格1": "71",
+            "价格2": ".9",
+            "规格": "茶语卷纸4层200克27卷",
+            "卖点": "200克大胖纸 大卷更耐用",
+            "商品图": "DT17100-20"
+          }
+        }
+      },
+      "approval_note": "按所选运营 Sheet 匹配对应规格和 PSD；每次只生成当前 Sheet，750 和 800 任务相互独立。"
+    },
+    {
+      "profile_id": "jd-main-800-v1",
+      "profile_version": "1.1.0",
+      "status": "pending_asset_approval",
+      "execution_mode": "legacy_layer_names",
+      "layout": "horizontal",
+      "variants": {
+        "main-800": {
+          "width": 800,
+          "height": 800
+        }
+      },
+      "default_variant": "main-800",
+      "approval_note": "京东自营第一版由 legacy-v1/main-800 兼容运行；此新 profile 等待已确认的渠道表与 PSD 资产，禁止自动选择或导出。"
+    },
+    {
+      "profile_id": "hygiene-tmall-v1.2",
+      "profile_version": "1.3.2",
+      "status": "enabled",
+      "execution_mode": "legacy_layer_names",
+      "layout": "record_rows",
+      "record_key": "商品文件名",
+      "static_product_art": false,
+      "category": "卫品",
+      "channel": "天猫官旗",
+      "matching": {
+        "mode": "field_id_alias",
+        "allow_unknown_fields": true,
+        "layer_prefixes": {
+          "text": "@",
+          "smart_object": "!",
+          "switch": "#"
+        }
+      },
+      "fields": [
+        {"field_id":"product_name","label":"商品文件名","output_key":"商品文件名","type":"text","required":true,"aliases":["商品文件名","输出文件名","文件名","文件名称","SKU"]},
+        {"field_id":"main_image","label":"商品图","output_key":"商品图","type":"smart_object","required":true,"aliases":["商品图","产品图路径","堆品路径","产品","产品图"]},
+        {"field_id":"selling_point","label":"卖点","output_key":"卖点","type":"text","aliases":["卖点","主卖点"]},
+        {"field_id":"activity_time","label":"活动时间","output_key":"活动时间","type":"text","aliases":["活动时间","时间"]},
+        {"field_id":"note","label":"备注","output_key":"备注","type":"text","aliases":["备注","设计备注"]},
+        {"field_id":"gift_image_1","label":"赠品图1","output_key":"赠品图1","type":"smart_object","aliases":["赠品图1"]},
+        {"field_id":"gift_image_2","label":"赠品图2","output_key":"赠品图2","type":"smart_object","aliases":["赠品图2"]},
+        {"field_id":"gift_image_3","label":"赠品图3","output_key":"赠品图3","type":"smart_object","aliases":["赠品图3"]},
+        {"field_id":"gift_copy_1","label":"赠品文案1","output_key":"赠品文案1","type":"text","aliases":["赠品文案1"]},
+        {"field_id":"gift_copy_2","label":"赠品文案2","output_key":"赠品文案2","type":"text","aliases":["赠品文案2"]},
+        {"field_id":"gift_copy_3","label":"赠品文案3","output_key":"赠品文案3","type":"text","aliases":["赠品文案3"]}
+      ],
+      "variant_selection": "sheet",
+      "variants": {
+        "main-750": {
+          "width": 750,
+          "height": 1000,
+          "output_label": "750",
+          "template_id": "hygiene-tmall-main-750-v1"
+        },
+        "main-800": {
+          "width": 750,
+          "height": 750,
+          "output_label": "800",
+          "template_id": "hygiene-tmall-main-800-v1",
+          "static_support_art": true
+        }
+      },
+      "accepted_template_sizes": [
+        {
+          "width": 750,
+          "height": 1000
+        },
+        {
+          "width": 750,
+          "height": 750
+        }
+      ],
+      "default_variant": "main-750",
+      "sheet": {
+        "selection": "explicit",
+        "required_headers": [
+          "渠道",
+          "是否出图",
+          "输出规格",
+          "输出文件名",
+          "商品SKU",
+          "商品系列",
+          "模板版式",
+          "产品图路径",
+          "代言人素材路径",
+          "主卖点",
+          "到手套数文案",
+          "到手数量",
+          "到手价",
+          "活动价",
+          "商品券金额",
+          "官方立减金额",
+          "官方立减文案",
+          "活动时间",
+          "赠品版式",
+          "赠品文案",
+          "赠品素材路径",
+          "赠品说明",
+          "设计备注",
+          "检查状态"
+        ],
+        "required_header_sets": [
+          [
+            "活动",
+            "系列",
+            "主卖点",
+            "备注",
+            "时间",
+            "堆品路径",
+            "片数",
+            "主推数",
+            "价格条",
+            "赠品路径",
+            "赠品文案",
+            "代言IP路径"
+          ],
+          [
+            "渠道",
+            "是否出图",
+            "输出规格",
+            "输出文件名",
+            "商品SKU",
+            "商品系列",
+            "模板版式",
+            "产品图路径",
+            "代言人素材路径",
+            "主卖点",
+            "到手套数文案",
+            "到手数量",
+            "到手价",
+            "活动价",
+            "商品券金额",
+            "官方立减金额",
+            "官方立减文案",
+            "活动时间",
+            "赠品版式",
+            "赠品文案",
+            "赠品素材路径",
+            "赠品说明",
+            "设计备注",
+            "检查状态"
+          ],
+          [
+            "渠道",
+            "是否出图",
+            "输出规格",
+            "商品文件名",
+            "货号",
+            "系列",
+            "版式组",
+            "商品图",
+            "代言IP",
+            "卖点",
+            "片数套",
+            "片数数量",
+            "到手",
+            "价格活动价",
+            "价格优惠券",
+            "价格立减",
+            "价格立减副标",
+            "活动时间",
+            "赠品区域",
+            "赠品文案",
+            "赠品素材路径",
+            "赠品说明",
+            "备注",
+            "检查状态"
+          ]
+        ]
+      },
+      "mapping": {
+        "legacy": {
+          "活动": "活动",
+          "系列": "系列",
+          "主卖点": "卖点",
+          "备注": "备注",
+          "时间": "活动时间",
+          "堆品路径": "商品图",
+          "片数": "片数",
+          "价格条": "价格条"
+        },
+        "standard": {
+          "输出文件名": "商品文件名",
+          "商品SKU": "货号",
+          "产品图路径": "商品图",
+          "主卖点": "卖点",
+          "设计备注": "备注",
+          "到手套数文案": "片数套",
+          "到手数量": "片数数量",
+          "到手价": "到手",
+          "活动价": "价格活动价",
+          "商品券金额": "价格优惠券",
+          "官方立减金额": "价格立减",
+          "模板版式": "版式组"
+        }
+      },
+      "record_required_fields": [
+        "活动时间",
+        "卖点",
+        "片数套",
+        "片数数量",
+        "到手",
+        "价格活动价"
+      ],
+      "optional_psd_variables": [
+        "备注",
+        "赠品图1",
+        "赠品图2",
+        "赠品图3",
+        "赠品文案1",
+        "赠品文案2",
+        "赠品文案3"
+      ],
+      "required_psd_variables": [
+        {
+          "name": "商品图",
+          "type": "smart_object"
+        },
+        {
+          "name": "卖点",
+          "type": "text"
+        },
+        {
+          "name": "备注",
+          "type": "text"
+        },
+        {
+          "name": "片数套",
+          "type": "text"
+        },
+        {
+          "name": "片数数量",
+          "type": "text"
+        },
+        {
+          "name": "到手标签",
+          "type": "text"
+        },
+        {
+          "name": "到手",
+          "type": "text"
+        },
+        {
+          "name": "价格活动价",
+          "type": "text"
+        },
+        {
+          "name": "赠品图1",
+          "type": "smart_object"
+        },
+        {
+          "name": "赠品图2",
+          "type": "smart_object"
+        },
+        {
+          "name": "赠品图3",
+          "type": "smart_object"
+        },
+        {
+          "name": "赠品文案1",
+          "type": "text"
+        },
+        {
+          "name": "赠品文案2",
+          "type": "text"
+        },
+        {
+          "name": "赠品文案3",
+          "type": "text"
+        }
+      ],
+      "record_layout": {
+        "groups": [
+          "三栏会员"
+        ],
+        "gift_slots": 3,
+        "group_selector": "所有商品行统一使用三栏会员版式；商品SKU仅作为标识，产品图路径或堆品路径动态替换商品图智能对象，赠品图和赠品文案按表格逐项替换",
+        "price_formula": "到手价=活动价-可选商品券-可选官方立减",
+        "empty_optional": "备注、代言IP路径、商品券、官方立减、赠品图和赠品文案为空时隐藏"
+      },
+      "text_fit": {
+        "keys": [
+          "卖点",
+          "备注",
+          "片数套",
+          "片数数量",
+          "到手标签",
+          "到手",
+          "价格活动价",
+          "价格优惠券",
+          "价格立减",
+          "赠品文案1",
+          "赠品文案2",
+          "赠品文案3"
+        ],
+        "minimum_scale": 0.72
+      },
+      "approval_note": "卫品天猫官旗支持 750x1000 三栏赠品和 750x750 无赠品两种已确认画布；商品组合按表格素材路径逐行替换。方图模板不绑定赠品槽，赠品列必须留空；SKU不参与PSD版式匹配；IP路径可空，有有效路径时插入。",
+      "static_support_art": false
+    },
+    {
+      "profile_id": "hengan-lifestyle-v1",
+      "profile_version": "1.3.0",
+      "status": "enabled",
+      "category": "纸品",
+      "channel": "恒安生活馆",
+      "execution_mode": "legacy_layer_names",
+      "layout": "vertical",
+      "matching": {
+        "mode": "field_id_alias",
+        "allow_unknown_fields": true,
+        "layer_prefixes": {
+          "text": "@",
+          "smart_object": "!"
+        }
+      },
+      "fields": [
+        {"field_id":"product_name","label":"商品文件名","output_key":"商品文件名","type":"text","required":true,"aliases":["商品文件名","文件名称","文件名","SKU"]},
+        {"field_id":"specification","label":"规格","output_key":"规格","type":"text","aliases":["规格","商品规格"]},
+        {"field_id":"benefit_1","label":"利益点1","output_key":"利益点1","type":"text","aliases":["利益点1","利益点(最下面的)","底部利益点"]},
+        {"field_id":"selling_point","label":"卖点","output_key":"卖点","type":"text","aliases":["卖点","卖点(堆图上面那行卖点)","主卖点"]},
+        {"field_id":"estimated_to_hand","label":"预估到手价","output_key":"预估到手价","type":"text","aliases":["预估到手价","到手价"]},
+        {"field_id":"price_1","label":"价格1","output_key":"价格1","type":"text","aliases":["价格1","价格一","价格01","price_1"]},
+        {"field_id":"price_2","label":"价格2","output_key":"价格2","type":"text","aliases":["价格2","价格二","价格02","price_2"]},
+        {"field_id":"price_3","label":"价格3","output_key":"价格3","type":"text","aliases":["价格3","价格三","价格03","price_3"]},
+        {"field_id":"main_image","label":"商品图","output_key":"商品图","type":"smart_object","aliases":["商品图","产品","产品（精确到图片名）","产品图"]}
+      ],
+      "variant_selection": "sheet",
+      "default_variant": "main-800",
+      "sheet": {
+        "required_headers": [
+          "商品文件名",
+          "规格",
+          "利益点1",
+          "卖点",
+          "预估到手价",
+          "价格1",
+          "价格2",
+          "商品图"
+        ],
+        "sku_header": "商品文件名",
+        "sku_header_aliases": ["文件名称", "文件名", "SKU"]
+      },
+      "mapping": {
+        "文件名称": "商品文件名",
+        "规格": "规格",
+        "利益点(最下面的)": "利益点1",
+        "卖点(堆图上面那行卖点)": "卖点",
+        "预估到手价": "预估到手价",
+        "价格1": "价格1",
+        "价格2": "价格2",
+        "产品（精确到图片名）": "商品图"
+      },
+      "text_fit": {
+        "keys": [
+          "利益点1",
+          "卖点",
+          "预估到手价",
+          "规格"
+        ],
+        "minimum_scale": 0.65
+      },
+      "required_psd_variables": [
+        {
+          "name": "利益点1",
+          "type": "text"
+        },
+        {
+          "name": "卖点",
+          "type": "text"
+        },
+        {
+          "name": "预估到手价",
+          "type": "text"
+        },
+        {
+          "name": "价格1",
+          "type": "text"
+        },
+        {
+          "name": "价格2",
+          "type": "text"
+        },
+        {
+          "name": "规格",
+          "type": "text"
+        },
+        {
+          "name": "商品图",
+          "type": "smart_object"
+        }
+      ],
+      "variants": {
+        "main-750": {
+          "width": 1440,
+          "height": 1920,
+          "template_id": "paper-hengan-main-750-v1",
+          "sheet_name": "750版新",
+          "text_fit": {
+            "keys": ["利益点1", "卖点", "预估到手价", "规格", "价格1"],
+            "minimum_scale": 0.65,
+            "minimum_scale_by_key": {"价格1": 0.35},
+            "frame_by_key": {
+              "价格1": {"left_px": 86, "right_px": 297, "top_px": 1320, "bottom_px": 1459}
+            }
+          },
+          "required_psd_variables": [
+            {
+              "name": "利益点1",
+              "type": "text"
+            },
+            {
+              "name": "卖点",
+              "type": "text"
+            },
+            {
+              "name": "预估到手价",
+              "type": "text"
+            },
+            {
+              "name": "价格1",
+              "type": "text"
+            },
+            {
+              "name": "价格2",
+              "type": "text"
+            },
+            {
+              "name": "规格",
+              "type": "text"
+            },
+            {
+              "name": "商品图",
+              "type": "smart_object"
+            }
+          ],
+          "template_bindings": {
+            "规格": "心相印茶语丝享抽纸S码100抽30包",
+            "利益点1": "下拉详情页 抢淘金币补贴",
+            "卖点": "原生木浆 柔厚不掉屑",
+            "预估到手价": "到手共：",
+            "价格1": "30",
+            "价格2": "包",
+            "商品图": "DT17090-24"
+          }
+        },
+        "main-800": {
+          "width": 1440,
+          "height": 1440,
+          "template_id": "paper-hengan-main-800-v1",
+          "sheet_name": "抽纸新",
+          "text_fit": {
+            "keys": ["利益点1", "卖点", "预估到手价", "规格", "价格1"],
+            "minimum_scale": 0.65,
+            "minimum_scale_by_key": {"价格1": 0.35},
+            "frame_by_key": {
+              "价格1": {"left_px": 87, "right_px": 278, "top_px": 1209, "bottom_px": 1350}
+            }
+          },
+          "required_psd_variables": [
+            {
+              "name": "利益点1",
+              "type": "text"
+            },
+            {
+              "name": "预估到手价",
+              "type": "text"
+            },
+            {
+              "name": "价格1",
+              "type": "text"
+            },
+            {
+              "name": "价格2",
+              "type": "text"
+            },
+            {
+              "name": "规格",
+              "type": "text"
+            },
+            {
+              "name": "商品图",
+              "type": "smart_object"
+            }
+          ],
+          "template_bindings": {
+            "规格": "心相印可溶抽纸80抽15包",
+            "利益点1": "柔软亲肤 遇水可冲散",
+            "预估到手价": "到手共：",
+            "价格1": "15",
+            "价格2": "包",
+            "商品图": "DT17090-24"
+          }
+        }
+      },
+      "approval_note": "恒安生活馆纸品模板按运营 Sheet 选择单一规格生成；750 和 800 独立输出，按实际 PSD 尺寸导出。800 模板没有卖点图层，不读取或要求卖点列。"
+    }
   ]
 }

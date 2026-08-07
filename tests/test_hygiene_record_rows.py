@@ -95,7 +95,7 @@ class HygieneRecordRowsTest(unittest.TestCase):
             self.assertEqual(record["赠品图1"], str(gift_one))
             self.assertEqual(record["赠品图2"], str(gift_two))
             self.assertEqual(record["赠品图3"], "")
-            self.assertEqual(record["版式组"], "无代言人")
+            self.assertEqual(record["版式组"], "三栏会员")
             self.assertFalse(error_path.read_text(encoding="utf-8-sig").splitlines()[1:])
 
     def test_price_and_piece_parsers_allow_real_optional_forms(self) -> None:
@@ -162,7 +162,7 @@ class HygieneRecordRowsTest(unittest.TestCase):
             with data_path.open(encoding="utf-8-sig", newline="") as handle:
                 record = next(csv.DictReader(handle))
             self.assertEqual(record["商品文件名"], "sku-750")
-            self.assertEqual(record["版式组"], "小马无侧边")
+            self.assertEqual(record["版式组"], "三栏会员")
             self.assertEqual(record["价格优惠券"], "")
             self.assertEqual(record["价格立减"], "20.4")
 
@@ -321,7 +321,7 @@ class HygieneRecordRowsTest(unittest.TestCase):
             self.assertEqual(error["错误码"], "E_GIFT_PAIR_MISMATCH")
             self.assertIn("一一对应", error["建议动作"])
 
-    def test_750_rejects_a_third_gift_card_before_photoshop_runs(self) -> None:
+    def test_750_accepts_three_gift_cards_before_photoshop_runs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             product = root / "product.png"
@@ -345,11 +345,9 @@ class HygieneRecordRowsTest(unittest.TestCase):
                 profile_id="hygiene-tmall-v1.2", variant="main-750",
             )
 
-            self.assertEqual((count, errors), (0, 1))
+            self.assertEqual((count, errors), (1, 0))
             with error_path.open(encoding="utf-8-sig", newline="") as handle:
-                error = next(csv.DictReader(handle))
-            self.assertEqual(error["错误码"], "E_GIFT_PAIR_MISMATCH")
-            self.assertIn("超过2项", error["异常详情"])
+                self.assertEqual(list(csv.DictReader(handle)), [])
 
 
 if __name__ == "__main__":

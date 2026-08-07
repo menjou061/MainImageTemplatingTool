@@ -28,18 +28,15 @@ class WindowsPhotoshopBridgeTest(unittest.TestCase):
         self.assertNotIn("-ArgumentList (,$progIds), $ScriptText", self.source)
 
     def test_progress_does_not_claim_com_connected_before_the_probe(self) -> None:
-        self.assertIn("正在连接 Photoshop 并准备打开模板", self.source)
+        self.assertIn("正在连接 Photoshop 并准备检查模板", self.source)
         self.assertNotIn("数据预检通过，已连接 Photoshop，准备打开模板", self.source)
 
-    def test_template_identity_blocks_before_photoshop_starts(self) -> None:
-        identity = self.source.index("模板身份校验")
+    def test_template_eligibility_uses_field_inspection_not_identity_metadata(self) -> None:
+        inspection = self.source.index("PSD 模板体检")
         start = self.source.index("$photoshop = Start-Photoshop")
-        missing_identity_block = self.source.index("if ($identityMissing -and $profileId -ne 'legacy-v1')")
-        self.assertLess(identity, start)
-        self.assertLess(missing_identity_block, start)
-        self.assertIn("E_TEMPLATE_IDENTITY_MISMATCH", self.source)
-        self.assertIn("E_TEMPLATE_IDENTITY_MISSING", self.source)
-        self.assertIn("template_identity.py", self.source)
+        self.assertLess(inspection, start)
+        self.assertIn("表格字段和 PSD 图层是否可匹配", self.source)
+        self.assertNotIn("E_TEMPLATE_IDENTITY_MISMATCH：PSD 模板身份未通过", self.source)
 
 
 if __name__ == "__main__":

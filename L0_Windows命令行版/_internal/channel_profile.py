@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+import re
 
 PROFILE_PATH = Path(__file__).with_name("channel_profiles.json")
 
@@ -63,13 +64,112 @@ def get_profile(profile_id: str | None, variant: str | None = None, *, require_e
     # Some channels keep one menu entry while their 750/800 PSDs expose
     # different fields. Apply those variant-specific contracts before
     # preflight and template preparation run.
-    for key in ("required_psd_variables", "mapping", "sheet", "text_fit", "ignored_headers", "record_layout"):
+    for key in (
+        "required_psd_variables", "mapping", "sheet", "text_fit", "ignored_headers",
+        "record_layout", "fields", "matching", "static_support_art", "static_product_art",
+    ):
         if key in selected_variant_config:
             result[key] = selected_variant_config[key]
     return result
 
+
+def normalize_field_alias(value: Any) -> str:
+    """Normalize a human-facing table header or PSD token for matching.
+
+    The visible labels remain Chinese and readable for operators/designers;
+    matching only removes binding punctuation and spacing so aliases such as
+    ``价格1``, ``@价格1`` and ``价格 1`` resolve to the same field.
+    """
+    text = str(value or "").strip().replace("\u3000", "")
+    while text[:1] in {"@", "!", "#"}:
+        text = text[1:]
+    text = re.sub(r"[\s_\-:/\\（）()【】\[\]{}<>]", "", text)
+    return text.casefold()
+
+
+def dynamic_field_key(value: Any) -> str:
+    """Return a stable CSV key for an unregistered field.
+
+    v1.3 deliberately accepts new labels without a script change. The
+    original readable label is retained in data.csv so JSX can bind a layer
+    with the same name immediately.
+    """
+    text = str(value or "").strip().replace("\u3000", " ")
+    while text[:1] in {"@", "!", "#"}:
+        text = text[1:]
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def field_definitions(profile: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return top-level plus variant-specific field definitions."""
+    definitions: list[dict[str, Any]] = []
+    for item in profile.get("fields", []) or []:
+        if isinstance(item, dict):
+            definitions.append(item)
+    variant = profile.get("variants", {}).get(profile.get("variant"), {})
+    for item in variant.get("fields", []) or []:
+        if not isinstance(item, dict):
+            continue
+        field_id = item.get("field_id")
+        definitions = [existing for existing in definitions if existing.get("field_id") != field_id]
+        definitions.append(item)
+    return definitions
+
+
+def field_alias_map(profile: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Build normalized alias -> field definition, including legacy mapping."""
+    result: dict[str, dict[str, Any]] = {}
+    for definition in field_definitions(profile):
+        output_key = str(definition.get("output_key") or definition.get("label") or definition.get("field_id") or "").strip()
+        if not output_key:
+            continue
+        aliases = list(definition.get("aliases", []) or [])
+        aliases.extend([definition.get("field_id"), definition.get("label"), output_key])
+        for alias in aliases:
+            key = normalize_field_alias(alias)
+            if key:
+                result.setdefault(key, {**definition, "output_key": output_key})
+    # Profiles before v1.3 only carry mapping. Keep those aliases working.
+    for source, target in (profile.get("mapping", {}) or {}).items():
+        key = normalize_field_alias(source)
+        if key and key not in result:
+            result[key] = {"field_id": target, "label": target, "output_key": target, "aliases": [source]}
+        elif key:
+            # Preserve an explicitly declared legacy mapping for old tables;
+            # canonical v1.3 labels still resolve through ``fields``.
+            result[key] = {"field_id": target, "label": target, "output_key": target, "aliases": [source]}
+    return result
+
+
+def resolve_field_name(value: Any, profile: dict[str, Any]) -> tuple[str, dict[str, Any] | None]:
+    """Resolve a table/layer name to its canonical CSV key and definition."""
+    raw = str(value or "").strip()
+    aliases = field_alias_map(profile)
+    definition = aliases.get(normalize_field_alias(raw))
+    if definition:
+        return str(definition["output_key"]), definition
+    if profile.get("matching", {}).get("allow_unknown_fields"):
+        return dynamic_field_key(raw), None
+    return raw, None
+
 def validate_vertical_schema(headers: list[str], profile: dict[str, Any]) -> None:
-    missing = sorted(set(profile.get("sheet", {}).get("required_headers", [])) - set(headers))
+    required_headers = list(profile.get("sheet", {}).get("required_headers", []))
+    if profile.get("matching", {}).get("mode") == "field_id_alias":
+        aliases = field_alias_map(profile)
+        normalized_headers = {normalize_field_alias(header) for header in headers if header}
+        missing = sorted(
+            header
+            for header in required_headers
+            if normalize_field_alias(header) not in normalized_headers
+            and not any(
+                normalize_field_alias(alias) in normalized_headers
+                and aliases.get(normalize_field_alias(alias), {}).get("output_key")
+                == aliases.get(normalize_field_alias(header), {}).get("output_key")
+                for alias in aliases
+            )
+        )
+    else:
+        missing = sorted(set(required_headers) - set(headers))
     if missing:
         raise ProfileError("E_PROFILE_SCHEMA_MISMATCH", "缺少列：" + "、".join(missing))
 
@@ -77,7 +177,16 @@ def map_vertical_headers(headers: list[str], profile: dict[str, Any]) -> dict[st
     validate_vertical_schema(headers, profile)
     mapping = profile.get("mapping", {})
     ignored = set(profile.get("ignored_headers", []))
-    unknown = [name for name in headers if name and name not in mapping and name not in ignored and name != "变量名称"]
+    resolved: dict[str, str] = {}
+    unknown = []
+    for name in headers:
+        if not name or name in ignored:
+            continue
+        target, definition = resolve_field_name(name, profile)
+        if definition or name in mapping or profile.get("matching", {}).get("allow_unknown_fields"):
+            resolved[name] = target
+        elif name != "变量名称":
+            unknown.append(name)
     if unknown:
         raise ProfileError("E_PROFILE_SCHEMA_MISMATCH", "存在未声明列：" + "、".join(unknown))
-    return {name: target for name, target in mapping.items() if name in headers}
+    return resolved
