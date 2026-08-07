@@ -113,17 +113,24 @@ function Select-ComboItem {
     param([System.Windows.Automation.AutomationElement]$Combo, [string]$Name)
     if (-not $Combo) { throw "未找到下拉框：$Name" }
     $Combo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
-    Start-Sleep -Milliseconds 250
-    $item = [System.Windows.Automation.AutomationElement]::RootElement.FindFirst(
-        [System.Windows.Automation.TreeScope]::Subtree,
-        (New-Object System.Windows.Automation.AndCondition(@(
-            (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, $Name)),
-            (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::ListItem))
-        )))
-    )
-    if (-not $item) { throw "下拉框没有选项：$Name" }
-    $item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
-    Start-Sleep -Milliseconds 250
+    $condition = New-Object System.Windows.Automation.AndCondition(@(
+        (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, $Name)),
+        (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::ListItem))
+    ))
+    $deadline = (Get-Date).AddSeconds(5)
+    do {
+        $item = [System.Windows.Automation.AutomationElement]::RootElement.FindFirst(
+            [System.Windows.Automation.TreeScope]::Subtree,
+            $condition
+        )
+        if ($item) {
+            $item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+            Start-Sleep -Milliseconds 250
+            return
+        }
+        Start-Sleep -Milliseconds 250
+    } while ((Get-Date) -lt $deadline)
+    throw "下拉框没有选项：$Name"
 }
 
 function Show-AutomationWindow {

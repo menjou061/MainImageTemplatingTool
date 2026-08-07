@@ -1225,7 +1225,7 @@ function main() {
         return inspection.status + "|" + inspection.message + "|" + document.fullName.fsName;
     }
     var result = inspection.status === "READY"
-        ? { status: "PREPARED", message: "模板已通过体检；已生成本次独立副本用于建立模板身份。" }
+        ? { status: "PREPARED", message: "模板已通过体检；已生成本次独立副本。" }
         : prepareTemplate(document, inspection, layerIndex);
     if (result.status !== "PREPARED") {
         return result.status + "|" + result.message + "|" + document.fullName.fsName;

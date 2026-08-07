@@ -2626,59 +2626,19 @@ try {
     # scripts. This prevents a first run from converting unrelated designs.
     $profileJson = $selectedProfile | ConvertTo-Json -Depth 8 -Compress
 
-    # A supplied sidecar is a strict approval contract and must be validated
-    # before Photoshop opens. A missing sidecar is different: deterministic
-    # legacy templates first get a task-copy preparation, then the copy gets
-    # its own SHA-256 sidecar and is validated before any export can begin.
+    # Template eligibility is decided by the PSD field inspection below. A
+    # neighbouring metadata file must never prevent a field-compliant user
+    # template from running.
     $sourcePsdPath = $psdPath
-    Set-RunProgress -Stage '模板身份校验' -Detail '正在校验 PSD 身份；首次导入的可确定旧版模板会先在副本上自动标准化。'
-    $identityCheck = Test-TemplateIdentity -Python $python -TemplatePath $sourcePsdPath -ProfileId $profileId -VariantId $variantId
-    $identityMissing = -not $identityCheck.Passed -and $identityCheck.Detail -match 'E_TEMPLATE_IDENTITY_MISSING'
-    if (-not $identityCheck.Passed -and -not $identityMissing) {
-        throw "E_TEMPLATE_IDENTITY_MISMATCH：PSD 模板身份未通过。$($identityCheck.Detail)"
-    }
-    if ($identityCheck.Passed) {
-        Add-Log "PSD 模板身份校验通过：$($identityCheck.Detail)"
-    } else {
-        Add-Log "PSD 尚无身份文件；将只在可确定映射通过后，为自动生成的副本建立身份文件：$($identityCheck.Detail)"
-    }
-    if ($identityMissing -and $profileId -ne 'legacy-v1') {
-        throw "E_TEMPLATE_IDENTITY_MISSING：当前渠道 PSD 缺少批准身份文件，不能自动信任。请使用对应批准 PSD 与 .template.json sidecar。"
-    }
-    $preparedTemplatePathsBefore = @(Get-PreparedTemplatePaths -TemplatePath $sourcePsdPath)
-
-    Set-RunProgress -Stage '启动 Photoshop' -Detail '数据预检通过，正在连接 Photoshop 并准备打开模板。'
+    Set-RunProgress -Stage 'PSD 模板体检' -Detail '正在检查表格字段和 PSD 图层是否可匹配。'
+    Set-RunProgress -Stage '启动 Photoshop' -Detail '数据预检通过，正在连接 Photoshop 并准备检查模板。'
     $photoshop = Start-Photoshop
-    $preparedPsdPath = Resolve-TemplateForTask -Application $photoshop -TemplatePath $sourcePsdPath -AllowExistingPreparedSibling:(-not $identityMissing) -ForceFreshCopy:$identityMissing
+    $preparedPsdPath = Resolve-TemplateForTask -Application $photoshop -TemplatePath $sourcePsdPath
     $preparedCopyIsSeparate = [System.IO.Path]::GetFullPath($preparedPsdPath) -ne [System.IO.Path]::GetFullPath($sourcePsdPath)
-    $preparedCopyWasPresentBefore = $preparedCopyIsSeparate -and (Test-PreparedTemplateWasPresent -TemplatePath $preparedPsdPath -ExistingPaths $preparedTemplatePathsBefore)
-    $preparedCopyCreatedThisRun = $preparedCopyIsSeparate -and -not $preparedCopyWasPresentBefore
     if ($preparedCopyIsSeparate) {
         $psdPath = $preparedPsdPath
         $script:CurrentPsdPath = $psdPath
-        Add-Log "本次任务将使用自动生成的模板副本：$psdPath"
-    }
-    if ($identityMissing) {
-        if (-not $preparedCopyCreatedThisRun) {
-            throw "E_TEMPLATE_IDENTITY_MISSING：首次导入的京东旧版 PSD 必须在本次任务生成新的独立标准副本；不会为历史副本或原 PSD 自动签发身份文件。请检查模板字段唯一性后重试。"
-        }
-        Write-PreparedTemplateIdentity -Python $python -TemplatePath $psdPath -SourcePsdPath $sourcePsdPath -ProfileId $profileId -VariantId $variantId
-    } else {
-        $preparedIdentity = Test-TemplateIdentity -Python $python -TemplatePath $psdPath -ProfileId $profileId -VariantId $variantId
-        if ($preparedCopyIsSeparate) {
-            if ($preparedCopyWasPresentBefore) {
-                if (-not $preparedIdentity.Passed) {
-                    throw "E_TEMPLATE_IDENTITY_MISMATCH：业务方提供的模板副本未通过身份校验。$($preparedIdentity.Detail)"
-                }
-                Add-Log '业务方提供的模板副本身份校验通过，本次不会改写其身份文件。'
-            } else {
-                # The deterministic preparation created fresh bytes in this task,
-                # so the new copy gets a fresh sidecar and is immediately rechecked.
-                Write-PreparedTemplateIdentity -Python $python -TemplatePath $psdPath -SourcePsdPath $sourcePsdPath -ProfileId $profileId -VariantId $variantId
-            }
-        } elseif (-not $preparedIdentity.Passed) {
-            throw "E_TEMPLATE_IDENTITY_MISMATCH：实际执行 PSD 模板身份未通过。$($preparedIdentity.Detail)"
-        }
+        Add-Log "本次任务将使用通过字段体检的模板副本：$psdPath"
     }
     $taskInfo = @(
         '电商主图套版任务信息',
