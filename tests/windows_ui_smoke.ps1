@@ -292,7 +292,7 @@ try {
     Capture-Desktop -Name '00-品类渠道选择.png'
     Invoke-Control -Control (Get-Control -Root $channelWindow -Name '下一步' -ControlType ([System.Windows.Automation.ControlType]::Button))
 
-    $mainWindow = Wait-DesktopWindow -Title '电商主图套版工具 1.2' -TimeoutSeconds 45
+    $mainWindow = Wait-DesktopWindow -Title '电商主图套版工具 1.4' -TimeoutSeconds 45
     Show-AutomationWindow -Window $mainWindow
     $photoshopHint = Get-Control -Root $mainWindow -Name '请先启动并登录 Photoshop，进入首页后再选择商品表格和 PSD 模板。' -ControlType ([System.Windows.Automation.ControlType]::Text)
     if (-not $photoshopHint) { throw '初始页缺少 Photoshop 启动提醒。' }
@@ -312,14 +312,14 @@ try {
     Invoke-Control -Control (Get-Control -Root $mainWindow -Name '重新读取' -ControlType ([System.Windows.Automation.ControlType]::Button))
     Start-Sleep -Seconds 5
 
-    $mainWindow = Wait-DesktopWindow -Title '电商主图套版工具 1.2'
+    $mainWindow = Wait-DesktopWindow -Title '电商主图套版工具 1.4'
     Show-AutomationWindow -Window $mainWindow
     if (-not [string]::IsNullOrWhiteSpace($SheetName)) {
         $sheetCombo = Get-Control -Root $mainWindow -Name '3  数据工作表' -ControlType ([System.Windows.Automation.ControlType]::ComboBox)
         if (-not $sheetCombo) { throw '未找到数据工作表下拉框。' }
         Select-ComboItem -Combo $sheetCombo -Name $SheetName
         Start-Sleep -Seconds 3
-        $mainWindow = Wait-DesktopWindow -Title '电商主图套版工具 1.2'
+        $mainWindow = Wait-DesktopWindow -Title '电商主图套版工具 1.4'
         Show-AutomationWindow -Window $mainWindow
         Write-SmokeLog "已显式选择 Sheet：$SheetName"
     }
@@ -364,7 +364,7 @@ try {
     Invoke-Control -Control $startButton
     if ($UseSingleProduct) {
         Start-Sleep -Milliseconds 800
-        if (Get-DesktopWindow -Title '电商主图套版工具 1.2') {
+        if (Get-DesktopWindow -Title '电商主图套版工具 1.4') {
             throw '生产入口仍停留在商品范围页，复选框未被实际勾选。'
         }
         Write-SmokeLog '生产入口已接受单商品选择，复选框状态验证通过。'

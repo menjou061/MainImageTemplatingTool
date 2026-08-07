@@ -1035,7 +1035,7 @@ function Select-TaskSettings {
     )
 
     $form = New-Object System.Windows.Forms.Form
-    $form.Text = '电商主图套版工具 1.2'
+    $form.Text = '电商主图套版工具 1.4'
     $form.StartPosition = 'CenterScreen'
     $form.Size = New-Object System.Drawing.Size(860, 650)
     $form.MinimumSize = New-Object System.Drawing.Size(860, 650)

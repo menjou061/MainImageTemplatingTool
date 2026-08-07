@@ -65,7 +65,7 @@ $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $artif
 
 $uiSmoke = Join-Path $PSScriptRoot 'windows_ui_smoke.ps1'
 Assert-File -Path $uiSmoke -Label 'Windows UI smoke script'
-& $uiSmoke -ToolRoot $toolRoot -ExcelPath $ExcelPath -PsdPath $PsdPath -OutputRoot $outputRoot -ArtifactDir $artifactRoot -ExpectedWidth $ExpectedWidth -ExpectedHeight $ExpectedHeight -UseSingleProduct:$UseSingleProduct -UseHygieneTmall
+& $uiSmoke -ToolRoot $toolRoot -ExcelPath $ExcelPath -PsdPath $PsdPath -OutputRoot $outputRoot -ArtifactDir $artifactRoot -Category '卫品' -Channel '天猫官旗' -SheetName '跑批数据' -ExpectedJpgWidth $ExpectedWidth -ExpectedJpgHeight $ExpectedHeight -UseSingleProduct:$UseSingleProduct
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath (Join-Path $artifactRoot 'PASS.txt') -PathType Leaf)) {
     throw "real desktop acceptance failed; inspect: $artifactRoot"
 }
