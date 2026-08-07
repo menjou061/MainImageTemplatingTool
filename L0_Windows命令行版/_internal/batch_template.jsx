@@ -777,13 +777,17 @@ function recordLayoutBindingErrors(template, profile) {
     if (!configured || configured.length === 0) {
         return ["E_CONFIG_MISMATCH: 卫品渠道缺少版式组配置"];
     }
-    var active = asNameList(profile.active_layout_groups);
-    var requested = active.length > 0 ? active : configured;
+    var requested = profile.active_layout_groups && profile.active_layout_groups.length > 0
+        ? profile.active_layout_groups : configured;
     var matches = [];
     for (var index = 0; index < requested.length; index++) {
         matches.push([]);
     }
-    collectProfileRecordLayoutMatches(template, requested, matches, profile);
+    if (usesStaticProductArt(profile)) {
+        collectProfileRecordLayoutMatches(template, requested, matches, profile);
+    } else {
+        collectRecordLayoutMatches(template, requested, matches);
+    }
     for (var layoutIndex = 0; layoutIndex < requested.length; layoutIndex++) {
         var layoutName = requested[layoutIndex];
         var layoutMatches = matches[layoutIndex];
